@@ -5,7 +5,9 @@ Ningún test lee el Excel de la cátedra ni la base real: todo se genera acá.
 
 from __future__ import annotations
 
+import sqlite3
 import sys
+from collections.abc import Iterator
 from pathlib import Path
 
 import pandas as pd
@@ -14,6 +16,10 @@ import pytest
 REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
+
+import catalog_data  # noqa: E402  (módulo auxiliar de tests/)
+
+from backend import db  # noqa: E402  (después de ajustar sys.path)
 
 
 # Devuelve las 8 hojas de un dataset chico y consistente, listo para modificar.
@@ -256,3 +262,26 @@ def excel_path(frames: dict[str, pd.DataFrame], tmp_path: Path) -> Path:
 def database_file(tmp_path: Path) -> Path:
     """La ruta de una base SQLite temporal, todavía sin crear."""
     return tmp_path / "test.db"
+
+
+@pytest.fixture
+def catalog_database(tmp_path: Path) -> Path:
+    """Una base temporal con el esquema real y el catálogo de prueba cargado."""
+    target = tmp_path / "catalogo_test.db"
+    connection = db.connect(target)
+    try:
+        db.create_schema(connection)
+        catalog_data.populate(connection)
+    finally:
+        connection.close()
+    return target
+
+
+@pytest.fixture
+def catalog_connection(catalog_database: Path) -> Iterator[sqlite3.Connection]:
+    """Una conexión abierta a la base de prueba del catálogo."""
+    connection = db.connect(catalog_database)
+    try:
+        yield connection
+    finally:
+        connection.close()
