@@ -1,0 +1,14 @@
+# Normaliza los finales de línea: LF en el repositorio y en el working tree.
+* text=auto eol=lf
+
+# Estos son de Windows y tienen que quedarse con CRLF.
+*.ps1 text eol=crlf
+*.bat text eol=crlf
+*.cmd text eol=crlf
+
+# Binarios: que git no los toque.
+*.xlsx binary
+*.db binary
+*.png binary
+*.jpg binary
+*.ico binary
