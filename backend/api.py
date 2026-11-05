@@ -5,14 +5,20 @@ Cada endpoint delega en `catalog.py`: acá solo se traducen parámetros y errore
 
 from __future__ import annotations
 
+import os
 import sqlite3
-from collections.abc import Iterator
+from collections.abc import Callable
+from contextlib import AbstractContextManager
 
 from fastapi import Depends, FastAPI, Path, Query, Request
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from backend import catalog, db
 from backend.models import Brand, Category, ProductDetail, ProductPage
+
+# Origen del frontend de Vite en desarrollo.
+DEFAULT_FRONTEND_ORIGINS = "http://localhost:5173,http://127.0.0.1:5173"
 
 app = FastAPI(
     title="MercaNova",
@@ -21,18 +27,52 @@ app = FastAPI(
 )
 
 
-# Abre una conexión por request y la cierra al terminar.
-def get_connection() -> Iterator[sqlite3.Connection]:
-    """Entrega la conexión a SQLite que usa cada endpoint.
+# Devuelve los orígenes que el navegador tiene permitido usar.
+def allowed_origins() -> list[str]:
+    """Resuelve los orígenes habilitados para CORS.
 
-    Yields:
-        La conexión, que se cierra cuando termina el request.
+    Returns:
+        Los orígenes de `FRONTEND_ORIGINS`, separados por coma, o los de
+        desarrollo si la variable está vacía o no tiene ningún origen válido.
+        Nunca devuelve una lista vacía: eso bloquearía todos los pedidos del
+        navegador sin dejar rastro de por qué.
     """
-    connection = db.connect()
-    try:
-        yield connection
-    finally:
-        connection.close()
+    configured = os.getenv("FRONTEND_ORIGINS") or ""
+    origins = [origin.strip() for origin in configured.split(",") if origin.strip()]
+    if origins:
+        return origins
+    return [origin.strip() for origin in DEFAULT_FRONTEND_ORIGINS.split(",")]
+
+
+# Sin esto el navegador bloquea los pedidos del frontend. El catálogo es de
+# solo lectura, así que se habilita únicamente GET y no se mandan credenciales.
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=allowed_origins(),
+    allow_credentials=False,
+    allow_methods=["GET"],
+    allow_headers=["*"],
+)
+
+
+# Fábrica de conexiones: se llama adentro del endpoint, no antes.
+ConnectionScope = Callable[[], AbstractContextManager[sqlite3.Connection]]
+
+
+def get_connection_scope() -> ConnectionScope:
+    """Entrega la fábrica con la que cada endpoint abre su conexión.
+
+    No devuelve una conexión ya abierta a propósito. FastAPI corre las
+    dependencias sincrónicas y los endpoints sincrónicos como tareas separadas
+    del threadpool, que pueden caer en hilos distintos; una conexión de SQLite
+    creada en la dependencia y usada en el endpoint falla con "SQLite objects
+    created in a thread can only be used in that same thread". Devolviendo la
+    fábrica, cada endpoint abre y cierra la suya en su propio hilo.
+
+    Returns:
+        Un callable que da un context manager con la conexión.
+    """
+    return db.connection_scope
 
 
 # Un producto inexistente es un 404, no un error del servidor.
@@ -65,8 +105,8 @@ def handle_sqlite_error(request: Request, error: sqlite3.Error) -> JSONResponse:
         status_code=503,
         content={
             "detail": (
-                f"No se pudo consultar el catálogo. Verificá que la base esté cargada con: "
-                f"python scripts/load_dataset.py. Detalle: {error}"
+                f"No se pudo consultar el catálogo. Si la base todavía no está cargada, "
+                f"corré: python scripts/load_dataset.py. Detalle: {error}"
             )
         },
     )
@@ -99,22 +139,23 @@ def read_products(
         description="Cantidad máxima de productos por página.",
     ),
     offset: int = Query(default=0, ge=0, description="Cantidad de productos a saltear."),
-    connection: sqlite3.Connection = Depends(get_connection),
+    connection_scope: ConnectionScope = Depends(get_connection_scope),
 ) -> ProductPage:
     """Busca productos con filtros opcionales y paginado."""
-    return catalog.list_products(
-        connection,
-        category=category,
-        subcategory=subcategory,
-        brand=brand,
-        recommended_for=recommended_for,
-        min_price=min_price,
-        max_price=max_price,
-        search=search,
-        only_active=only_active,
-        limit=limit,
-        offset=offset,
-    )
+    with connection_scope() as connection:
+        return catalog.list_products(
+            connection,
+            category=category,
+            subcategory=subcategory,
+            brand=brand,
+            recommended_for=recommended_for,
+            min_price=min_price,
+            max_price=max_price,
+            search=search,
+            only_active=only_active,
+            limit=limit,
+            offset=offset,
+        )
 
 
 @app.get(
@@ -125,21 +166,26 @@ def read_products(
 )
 def read_product(
     product_id: str = Path(description="Identificador del producto, por ejemplo 'MN-MON-0001'."),
-    connection: sqlite3.Connection = Depends(get_connection),
+    connection_scope: ConnectionScope = Depends(get_connection_scope),
 ) -> ProductDetail:
     """Devuelve un producto con su precio, su stock total y sus especificaciones."""
-    return catalog.get_product(connection, product_id)
+    with connection_scope() as connection:
+        return catalog.get_product(connection, product_id)
 
 
 @app.get("/categories", response_model=list[Category], summary="Lista las categorías")
 def read_categories(
-    connection: sqlite3.Connection = Depends(get_connection),
+    connection_scope: ConnectionScope = Depends(get_connection_scope),
 ) -> list[Category]:
     """Devuelve los pares categoría/subcategoría del catálogo."""
-    return catalog.list_categories(connection)
+    with connection_scope() as connection:
+        return catalog.list_categories(connection)
 
 
 @app.get("/brands", response_model=list[Brand], summary="Lista las marcas")
-def read_brands(connection: sqlite3.Connection = Depends(get_connection)) -> list[Brand]:
+def read_brands(
+    connection_scope: ConnectionScope = Depends(get_connection_scope),
+) -> list[Brand]:
     """Devuelve las marcas del catálogo."""
-    return catalog.list_brands(connection)
+    with connection_scope() as connection:
+        return catalog.list_brands(connection)

@@ -1,0 +1,249 @@
+/* Listado: encabezado, barra de filtros, grilla de tarjetas, paginado y avisos. */
+
+.app {
+  max-width: 1180px;
+  margin: 0 auto;
+  padding: var(--space-5) var(--space-4) var(--space-6);
+}
+
+.header {
+  padding-bottom: var(--space-4);
+  margin-bottom: var(--space-5);
+  border-bottom: 1px solid var(--color-border);
+}
+
+.header-subtitle {
+  margin-top: var(--space-1);
+  font-size: var(--text-md);
+  color: var(--color-text-muted);
+}
+
+/* Filtros: una grilla que se reacomoda sola, así nada queda desalineado. */
+
+.filters {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+  gap: var(--space-3) var(--space-4);
+  align-items: end;
+  padding: var(--space-4);
+  margin-bottom: var(--space-5);
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-card);
+}
+
+.filters label {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  font-size: var(--text-sm);
+  font-weight: var(--weight-medium);
+  color: var(--color-text-muted);
+}
+
+/* La búsqueda ocupa dos columnas mientras haya lugar. */
+.filters-search {
+  grid-column: span 2;
+}
+
+.filters-actions {
+  display: flex;
+  gap: var(--space-2);
+}
+
+.filters-actions button {
+  flex: 1;
+}
+
+@media (max-width: 760px) {
+  .filters {
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .filters-search,
+  .filters-actions {
+    grid-column: span 2;
+  }
+}
+
+@media (max-width: 420px) {
+  .filters {
+    grid-template-columns: 1fr;
+  }
+
+  .filters-search,
+  .filters-actions {
+    grid-column: span 1;
+  }
+}
+
+/* Grilla: 4 columnas, 2 en tablet, 1 en celular. */
+
+.grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: var(--space-4);
+}
+
+@media (max-width: 1024px) {
+  .grid {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
+
+@media (max-width: 600px) {
+  .grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* Tarjetas. */
+
+.card {
+  display: flex;
+  flex-direction: column;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-card);
+  overflow: hidden;
+  cursor: pointer;
+  transition: transform var(--transition), box-shadow var(--transition),
+    border-color var(--transition);
+}
+
+.card:hover {
+  transform: translateY(-2px);
+  border-color: var(--color-accent);
+  box-shadow: var(--shadow-card-hover);
+}
+
+.card:hover .card-name {
+  color: var(--color-accent);
+}
+
+.card-image {
+  width: 100%;
+  height: 170px;
+  object-fit: cover;
+  background: var(--color-background);
+  border-bottom: 1px solid var(--color-border);
+}
+
+.card-body {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-4);
+}
+
+.card-name {
+  font-size: var(--text-md);
+  font-weight: var(--weight-semibold);
+  transition: color var(--transition);
+}
+
+.card-brand {
+  font-size: var(--text-sm);
+  color: var(--color-text-muted);
+}
+
+/* Jerarquía del precio: es el dato más grande de la tarjeta. */
+.card-price {
+  font-size: var(--text-xl);
+  font-weight: var(--weight-semibold);
+  letter-spacing: -0.01em;
+}
+
+.card-stock {
+  align-self: flex-start;
+}
+
+/* El botón queda abajo, alineado entre tarjetas de distinto alto. */
+.card-body button {
+  margin-top: auto;
+}
+
+/* Paginado. */
+
+.pagination {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-4);
+  margin-top: var(--space-5);
+}
+
+.pagination-status {
+  font-size: var(--text-sm);
+  color: var(--color-text-muted);
+}
+
+/* Avisos: mismo panel que el resto, no texto suelto. */
+
+.notice {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-6) var(--space-4);
+  text-align: center;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-card);
+}
+
+.notice-title {
+  font-size: var(--text-lg);
+  font-weight: var(--weight-semibold);
+}
+
+.notice-text {
+  max-width: 54ch;
+  font-size: var(--text-md);
+  color: var(--color-text-muted);
+}
+
+.notice-error {
+  border-color: var(--color-alert);
+  background: var(--color-alert-soft);
+}
+
+.notice-error .notice-title {
+  color: var(--color-alert);
+}
+
+.notice-error .notice-text {
+  color: var(--color-text);
+}
+
+/* Indicador de carga: dos anillos girando, sin imágenes. */
+
+.spinner {
+  width: 22px;
+  height: 22px;
+  border: 2px solid var(--color-border);
+  border-top-color: var(--color-accent);
+  border-radius: 50%;
+  animation: spin 700ms linear infinite;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .spinner {
+    animation-duration: 2s;
+  }
+
+  .card:hover {
+    transform: none;
+  }
+}

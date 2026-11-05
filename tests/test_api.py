@@ -3,7 +3,11 @@
 from __future__ import annotations
 
 import sqlite3
+import threading
 from collections.abc import Iterator
+from concurrent.futures import ThreadPoolExecutor
+from contextlib import contextmanager
+from functools import partial
 from pathlib import Path
 
 import pytest
@@ -15,15 +19,9 @@ from backend import api, db
 @pytest.fixture
 def client(catalog_database: Path) -> Iterator[TestClient]:
     """Un cliente de test apuntado a la base de prueba, no a la real."""
-
-    def connection_for_test() -> Iterator[sqlite3.Connection]:
-        connection = db.connect(catalog_database)
-        try:
-            yield connection
-        finally:
-            connection.close()
-
-    api.app.dependency_overrides[api.get_connection] = connection_for_test
+    api.app.dependency_overrides[api.get_connection_scope] = lambda: partial(
+        db.connection_scope, catalog_database
+    )
     with TestClient(api.app) as test_client:
         yield test_client
     api.app.dependency_overrides.clear()
@@ -56,6 +54,7 @@ def test_the_products_endpoint_returns_the_expected_shape(client: TestClient) ->
         "current_price",
         "available_qty",
         "active",
+        "image_url",
     }
 
 
@@ -120,6 +119,139 @@ def test_the_listing_does_not_bring_the_tags(client: TestClient) -> None:
     body = client.get("/products", params={"limit": 1}).json()
 
     assert "tags" not in body["items"][0]
+
+
+def test_the_listing_brings_the_image_to_show_the_card(client: TestClient) -> None:
+    body = client.get("/products", params={"search": "Nova Vision"}).json()
+
+    assert body["items"][0]["image_url"] == "https://placehold.co/800x600/png?text=MON-10000"
+
+
+ENDPOINTS = ["/products?limit=1", "/categories", "/brands", "/products/MN-MON-0001"]
+
+
+def test_several_consecutive_requests_to_different_endpoints_work(client: TestClient) -> None:
+    # Una conexión de SQLite reusada entre requests rompe acá.
+    codes = [client.get(endpoint).status_code for endpoint in ENDPOINTS * 3]
+
+    assert codes == [200] * len(ENDPOINTS) * 3
+
+
+def test_concurrent_requests_to_different_endpoints_work(client: TestClient) -> None:
+    # Como los pide el navegador al cargar el listado: varios a la vez, que el
+    # threadpool reparte entre hilos distintos.
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        responses = list(pool.map(client.get, ENDPOINTS * 6))
+
+    assert [response.status_code for response in responses] == [200] * len(ENDPOINTS) * 6
+
+
+def test_every_request_opens_and_closes_its_own_connection(
+    client: TestClient, catalog_database: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    opened: list[sqlite3.Connection] = []
+    closed: list[sqlite3.Connection] = []
+
+    @contextmanager
+    def counting_scope() -> Iterator[sqlite3.Connection]:
+        connection = db.connect(catalog_database)
+        opened.append(connection)
+        try:
+            yield connection
+        finally:
+            closed.append(connection)
+            connection.close()
+
+    api.app.dependency_overrides[api.get_connection_scope] = lambda: counting_scope
+    for endpoint in ENDPOINTS:
+        assert client.get(endpoint).status_code == 200
+
+    assert len(opened) == len(ENDPOINTS)
+    assert closed == opened
+    # Ninguna conexión se comparte entre requests.
+    assert len({id(connection) for connection in opened}) == len(ENDPOINTS)
+
+
+def test_the_connection_is_used_in_the_thread_that_created_it(
+    client: TestClient, catalog_database: Path
+) -> None:
+    threads: list[tuple[int, int]] = []
+
+    @contextmanager
+    def recording_scope() -> Iterator[sqlite3.Connection]:
+        created_in = threading.get_ident()
+        with db.connection_scope(catalog_database) as connection:
+            # El endpoint consulta adentro de este bloque: el hilo que la crea
+            # tiene que ser el mismo que la usa, o SQLite falla.
+            threads.append((created_in, threading.get_ident()))
+            yield connection
+
+    api.app.dependency_overrides[api.get_connection_scope] = lambda: recording_scope
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        list(pool.map(client.get, ENDPOINTS * 4))
+
+    assert threads
+    assert all(created == used for created, used in threads)
+
+
+@pytest.mark.parametrize("origin", ["http://localhost:5173", "http://127.0.0.1:5173"])
+def test_the_api_allows_the_frontend_origin(client: TestClient, origin: str) -> None:
+    response = client.get("/products", headers={"Origin": origin})
+
+    assert response.headers["access-control-allow-origin"] == origin
+
+
+def test_the_api_does_not_allow_an_unknown_origin(client: TestClient) -> None:
+    response = client.get("/products", headers={"Origin": "http://sitio-ajeno.com"})
+
+    # Sin el header, el navegador bloquea la respuesta.
+    assert "access-control-allow-origin" not in response.headers
+
+
+def test_the_preflight_of_the_browser_is_answered(client: TestClient) -> None:
+    response = client.options(
+        "/products",
+        headers={
+            "Origin": "http://localhost:5173",
+            "Access-Control-Request-Method": "GET",
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.headers["access-control-allow-origin"] == "http://localhost:5173"
+
+
+def test_the_allowed_origins_are_the_development_ones_by_default(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("FRONTEND_ORIGINS", raising=False)
+
+    assert api.allowed_origins() == ["http://localhost:5173", "http://127.0.0.1:5173"]
+
+
+def test_the_allowed_origins_come_from_the_environment(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("FRONTEND_ORIGINS", "https://mercanova.uy")
+
+    assert api.allowed_origins() == ["https://mercanova.uy"]
+
+
+def test_several_allowed_origins_are_separated_by_comma(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("FRONTEND_ORIGINS", " https://a.uy , https://b.uy ")
+
+    assert api.allowed_origins() == ["https://a.uy", "https://b.uy"]
+
+
+@pytest.mark.parametrize("configured", ["", "   ", ",", " , "])
+def test_an_empty_variable_falls_back_to_the_development_origins(
+    monkeypatch: pytest.MonkeyPatch, configured: str
+) -> None:
+    monkeypatch.setenv("FRONTEND_ORIGINS", configured)
+
+    assert api.allowed_origins() == ["http://localhost:5173", "http://127.0.0.1:5173"]
 
 
 def test_the_products_endpoint_paginates(client: TestClient) -> None:
@@ -217,14 +349,9 @@ def test_the_brands_endpoint_lists_the_brands(client: TestClient) -> None:
 def test_the_api_answers_503_when_the_database_is_not_loaded(tmp_path: Path) -> None:
     empty_database = tmp_path / "vacia.db"
 
-    def connection_without_schema() -> Iterator[sqlite3.Connection]:
-        connection = db.connect(empty_database)
-        try:
-            yield connection
-        finally:
-            connection.close()
-
-    api.app.dependency_overrides[api.get_connection] = connection_without_schema
+    api.app.dependency_overrides[api.get_connection_scope] = lambda: partial(
+        db.connection_scope, empty_database
+    )
     try:
         with TestClient(api.app, raise_server_exceptions=False) as test_client:
             response = test_client.get("/products")

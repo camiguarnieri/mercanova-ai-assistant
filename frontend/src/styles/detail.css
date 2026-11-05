@@ -1,0 +1,177 @@
+/* Ficha de producto: encabezado, datos, etiquetas y especificaciones. */
+
+.detail {
+  padding: var(--space-5);
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-card);
+}
+
+.detail-header {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-5);
+  padding-bottom: var(--space-5);
+  margin: var(--space-5) 0;
+  border-bottom: 1px solid var(--color-border);
+}
+
+.detail-image {
+  object-fit: cover;
+  background: var(--color-background);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+}
+
+.detail-summary {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: var(--space-2);
+  min-width: 260px;
+}
+
+.detail-brand {
+  font-size: var(--text-md);
+  color: var(--color-text-muted);
+}
+
+/* Jerarquía del precio: el vigente manda, el de lista queda tachado al lado. */
+.detail-price {
+  font-size: var(--text-2xl);
+  font-weight: var(--weight-semibold);
+  letter-spacing: -0.01em;
+}
+
+.detail-list-price {
+  font-size: var(--text-sm);
+  color: var(--color-text-muted);
+}
+
+.detail-list-price s {
+  margin-right: var(--space-2);
+}
+
+.detail-stock {
+  align-self: flex-start;
+}
+
+.detail-inactive {
+  align-self: flex-start;
+}
+
+.detail-description {
+  margin-bottom: var(--space-5);
+  color: var(--color-text);
+}
+
+.detail-section-title {
+  margin: var(--space-5) 0 var(--space-3);
+}
+
+/* Etiquetas: recomendado para, características, tags. */
+
+.detail-tags {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--space-2);
+  margin-bottom: var(--space-3);
+  font-size: var(--text-sm);
+}
+
+.detail-tags-label {
+  font-weight: var(--weight-medium);
+  color: var(--color-text-muted);
+}
+
+.tag {
+  padding: var(--space-1) var(--space-3);
+  font-size: var(--text-xs);
+  background: var(--color-accent-soft);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-pill);
+}
+
+/* Datos sueltos del producto. */
+
+.detail-facts {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: var(--space-3) var(--space-5);
+  margin: 0;
+}
+
+.detail-fact {
+  display: flex;
+  justify-content: space-between;
+  gap: var(--space-3);
+  padding-bottom: var(--space-2);
+  border-bottom: 1px solid var(--color-border);
+}
+
+.detail-fact dt {
+  font-size: var(--text-sm);
+  color: var(--color-text-muted);
+}
+
+.detail-fact dd {
+  margin: 0;
+  font-size: var(--text-sm);
+  font-weight: var(--weight-medium);
+  text-align: right;
+}
+
+/* Especificaciones, agrupadas por attribute_group. */
+
+.specs {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(290px, 1fr));
+  gap: var(--space-4);
+}
+
+.specs-group {
+  padding: var(--space-4);
+  background: var(--color-background);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+}
+
+.specs-group h3 {
+  padding-bottom: var(--space-2);
+  margin-bottom: var(--space-2);
+  font-size: var(--text-md);
+  border-bottom: 1px solid var(--color-border);
+}
+
+.specs table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--text-sm);
+}
+
+.specs th {
+  padding: var(--space-1) var(--space-3) var(--space-1) 0;
+  font-weight: var(--weight-normal);
+  color: var(--color-text-muted);
+  text-align: left;
+  vertical-align: top;
+}
+
+.specs td {
+  padding: var(--space-1) 0;
+  font-weight: var(--weight-medium);
+  text-align: right;
+}
+
+@media (max-width: 600px) {
+  .detail {
+    padding: var(--space-4);
+  }
+
+  .detail-image {
+    width: 100%;
+    height: auto;
+  }
+}
