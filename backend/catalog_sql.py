@@ -11,7 +11,7 @@ from typing import Any
 # Columnas del resumen: los nombres coinciden con los campos de Product.
 SUMMARY_COLUMNS = """
     p.product_id, p.sku, p.name, p.brand, p.category, p.subcategory,
-    p.short_description, p.recommended_for, p.active,
+    p.short_description, p.recommended_for, p.active, p.image_url,
     pr.currency, pr.current_price,
     COALESCE(stock.available_qty, 0) AS available_qty
 """
@@ -20,7 +20,7 @@ SUMMARY_COLUMNS = """
 DETAIL_COLUMNS = """,
     p.description, p.not_recommended_for, p.key_features, p.tags,
     p.color, p.weight_kg, p.warranty_months, p.return_days, p.rating,
-    p.review_count, p.launch_date, p.image_url,
+    p.review_count, p.launch_date,
     pr.list_price, pr.discount_percent, pr.tax_included, pr.price_updated_at
 """
 

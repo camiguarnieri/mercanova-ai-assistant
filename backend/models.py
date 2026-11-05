@@ -117,6 +117,9 @@ class Product(BaseModel):
             "Unidades disponibles en total, sumando los 5 depósitos. 0 significa sin stock."
         )
     )
+    image_url: str | None = Field(
+        default=None, description="URL de la imagen del producto, para mostrar en el listado."
+    )
     active: bool = Field(
         description="True si el producto está activo en el catálogo, false si fue dado de baja."
     )
@@ -149,7 +152,6 @@ class ProductDetail(Product):
     rating: float | None = Field(default=None, description="Puntaje promedio, de 0 a 5.")
     review_count: int | None = Field(default=None, description="Cantidad de reseñas.")
     launch_date: date | None = Field(default=None, description="Fecha de lanzamiento.")
-    image_url: str | None = Field(default=None, description="URL de la imagen del producto.")
     list_price: float | None = Field(
         default=None, description="Precio de lista, sin el descuento aplicado."
     )

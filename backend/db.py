@@ -7,6 +7,8 @@ from __future__ import annotations
 
 import os
 import sqlite3
+from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
 
 __all__ = [
@@ -17,6 +19,7 @@ __all__ = [
     "TABLES",
     "database_path",
     "connect",
+    "connection_scope",
     "create_schema",
     "table_counts",
 ]
@@ -106,6 +109,28 @@ def connect(path: str | Path | None = None) -> sqlite3.Connection:
     # El pragma es por conexión: sin esto SQLite ignora las claves foráneas.
     connection.execute("PRAGMA foreign_keys = ON")
     return connection
+
+
+# Abre una conexión y la cierra al salir del bloque.
+@contextmanager
+def connection_scope(path: str | Path | None = None) -> Iterator[sqlite3.Connection]:
+    """Da una conexión con ciclo de vida acotado a un bloque `with`.
+
+    Una conexión de SQLite solo se puede usar en el hilo que la creó, así que
+    hay que abrirla dentro de la misma función que la consulta. Este context
+    manager existe para que quien la usa no se olvide de cerrarla.
+
+    Args:
+        path: Ruta del archivo SQLite. Si es `None` se usa `database_path()`.
+
+    Yields:
+        La conexión, que se cierra al terminar el bloque, incluso si falla.
+    """
+    connection = connect(path)
+    try:
+        yield connection
+    finally:
+        connection.close()
 
 
 # Aplica schema.sql sobre la conexión; se puede correr muchas veces sin efecto.
