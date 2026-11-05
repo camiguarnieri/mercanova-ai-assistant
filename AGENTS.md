@@ -165,6 +165,7 @@ categorías y marcas.
 - No crear abstracciones "por las dudas".
 - No dejar código comentado ni funciones sin usar.
 - Si algo no se puede resolver bien, decirlo en vez de dejar una solución a medias.
+- No hacer commits ni push. Dejar los cambios en el working tree; el equipo los revisa y commitea.
 
 El equipo tiene que poder explicar cada decisión en la defensa. Código que funciona pero
 que nadie puede explicar no sirve.
