@@ -10,7 +10,15 @@ from __future__ import annotations
 import sqlite3
 
 from backend import catalog_sql
-from backend.models import Brand, Category, Product, ProductDetail, ProductPage, Specification
+from backend.models import (
+    Brand,
+    Category,
+    Product,
+    ProductDetail,
+    ProductPage,
+    RelatedProduct,
+    Specification,
+)
 
 DEFAULT_LIMIT = 20
 MAX_LIMIT = 100
@@ -165,6 +173,62 @@ def get_product(connection: sqlite3.Connection, product_id: str) -> ProductDetai
         Specification.model_validate(dict(specification)) for specification in specifications
     ]
     return ProductDetail.model_validate(detail)
+
+
+# Lista los productos que el catálogo relaciona con uno dado.
+def list_related_products(
+    connection: sqlite3.Connection, product_id: str, relation_type: str | None = None
+) -> list[RelatedProduct]:
+    """Busca los productos relacionados con uno dado.
+
+    Args:
+        connection: Conexión abierta con `db.connect()`.
+        product_id: Identificador del producto del que se parte.
+        relation_type: Tipo de relación por el que filtrar. Si es `None`, trae
+            los tres tipos juntos.
+
+    Returns:
+        Los relacionados, del más fuerte al más débil. Una lista vacía
+        significa que el producto existe pero no tiene relaciones cargadas.
+
+    Raises:
+        ProductNotFoundError: Si el producto del que se parte no existe.
+        InvalidFilterError: Si el tipo de relación no es uno de los del dataset.
+    """
+    identifier = product_id.strip()
+    if relation_type is not None and relation_type not in catalog_sql.RELATION_TYPES:
+        raise InvalidFilterError(
+            f"El tipo de relación '{relation_type}' no existe. "
+            f"Los válidos son: {', '.join(catalog_sql.RELATION_TYPES)}."
+        )
+    if connection.execute(catalog_sql.PRODUCT_EXISTS_QUERY, [identifier]).fetchone() is None:
+        raise ProductNotFoundError(
+            f"No existe el producto '{product_id}' en el catálogo. "
+            f"Buscá el identificador correcto con el listado de productos."
+        )
+
+    where = "WHERE r.product_id = ?"
+    parameters: list[object] = [identifier]
+    if relation_type is not None:
+        where += " AND r.relation_type = ?"
+        parameters.append(relation_type)
+
+    rows = connection.execute(
+        f"SELECT r.relation_type, r.strength, {catalog_sql.SUMMARY_COLUMNS} "
+        f"{catalog_sql.RELATED_SOURCE} {where} {catalog_sql.RELATED_ORDER}",
+        parameters,
+    ).fetchall()
+
+    related: list[RelatedProduct] = []
+    for row in rows:
+        fields = dict(row)
+        relation = {
+            "relation_type": fields.pop("relation_type"),
+            "strength": fields.pop("strength"),
+            "product": Product.model_validate(fields),
+        }
+        related.append(RelatedProduct.model_validate(relation))
+    return related
 
 
 # Lista los pares categoría/subcategoría del catálogo.

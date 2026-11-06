@@ -161,6 +161,14 @@ INVENTORY = [
     ("MN-HDP-0002", "WH-A", 2, 0, 2, "In stock", "2026-10-27 13:00:00"),
 ]
 
+# MN-HDP-0003 queda sin relaciones, para probar ese caso.
+RELATIONS = [
+    ("MN-MON-0001", "MN-MON-0002", "alternative_to", 0.82),
+    ("MN-MON-0001", "MN-HDP-0001", "accessory_for", 0.61),
+    ("MN-MON-0001", "MN-HDP-0002", "often_bought_with", 0.55),
+    ("MN-MON-0002", "MN-MON-0001", "alternative_to", 0.80),
+]
+
 SPECIFICATIONS = [
     ("MN-MON-0001", "Display", "Screen Size", None, 24.0, "in"),
     ("MN-MON-0001", "Display", "Panel", "IPS", None, None),
@@ -185,6 +193,7 @@ def populate(connection: sqlite3.Connection) -> None:
         "pricing": PRICING,
         "inventory": INVENTORY,
         "specifications": SPECIFICATIONS,
+        "relations": RELATIONS,
     }
     with connection:
         for table, rows in tables.items():

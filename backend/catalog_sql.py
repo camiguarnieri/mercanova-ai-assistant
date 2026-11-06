@@ -27,8 +27,7 @@ DETAIL_COLUMNS = """,
 # El stock vive por depósito: para el catálogo se suma el de los 5 depósitos.
 # Los LEFT JOIN evitan que un producto desaparezca del catálogo por no tener
 # precio o inventario cargado; en ese caso el precio viaja en null.
-PRODUCT_SOURCE = """
-FROM products AS p
+PRICE_AND_STOCK_JOINS = """
 LEFT JOIN pricing AS pr ON pr.product_id = p.product_id
 LEFT JOIN (
     SELECT product_id, SUM(available_qty) AS available_qty
@@ -37,8 +36,24 @@ LEFT JOIN (
 ) AS stock ON stock.product_id = p.product_id
 """
 
+PRODUCT_SOURCE = "\nFROM products AS p" + PRICE_AND_STOCK_JOINS
+
+# Para los relacionados se arranca de relations y se trae el otro producto.
+RELATED_SOURCE = (
+    "\nFROM relations AS r"
+    "\nJOIN products AS p ON p.product_id = r.related_product_id" + PRICE_AND_STOCK_JOINS
+)
+
 # El orden por nombre e id hace que el paginado sea estable entre llamadas.
 PRODUCT_ORDER = "ORDER BY p.name, p.product_id"
+
+# Los relacionados se ordenan por fuerza de la relación, de mayor a menor.
+RELATED_ORDER = "ORDER BY r.strength DESC, p.name"
+
+# Tipos de relación que trae el dataset.
+RELATION_TYPES = ("alternative_to", "accessory_for", "often_bought_with")
+
+PRODUCT_EXISTS_QUERY = "SELECT 1 FROM products WHERE product_id = ?"
 
 SPECIFICATIONS_QUERY = """
 SELECT attribute_group, attribute_name, value_text, value_number, unit

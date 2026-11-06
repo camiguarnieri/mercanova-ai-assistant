@@ -170,6 +170,24 @@ class ProductDetail(Product):
     )
 
 
+class RelatedProduct(BaseModel):
+    """Un producto relacionado con otro, según el catálogo."""
+
+    model_config = MODEL_CONFIG
+
+    relation_type: str = Field(
+        description=(
+            "Tipo de relación: 'alternative_to' (alternativa al producto consultado), "
+            "'accessory_for' (accesorio para ese producto) u 'often_bought_with' "
+            "(se suele comprar junto con ese producto)."
+        )
+    )
+    strength: float = Field(
+        description="Fuerza de la relación según el catálogo, de 0 a 1. Más alto es más fuerte."
+    )
+    product: Product = Field(description="El resumen del producto relacionado.")
+
+
 class ProductPage(BaseModel):
     """Una página de resultados del listado de productos."""
 
