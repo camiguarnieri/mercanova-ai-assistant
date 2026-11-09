@@ -14,12 +14,17 @@ EXPECTED_NAMES = [
     "check_availability",
     "compare_products",
     "get_related_products",
-    "list_categories",
 ]
 
 
-def test_there_are_six_tools() -> None:
-    assert len(tool_schemas.TOOL_SCHEMAS) == 6
+def test_there_are_five_tools() -> None:
+    assert len(tool_schemas.TOOL_SCHEMAS) == 5
+
+
+def test_the_categories_are_not_a_tool_of_their_own() -> None:
+    # Viajan en el enum de search_products: una herramienta para pedirlas no
+    # aporta nada y ocupa contexto en cada turno.
+    assert "list_categories" not in tool_schemas.TOOL_NAMES
 
 
 def test_the_tools_are_the_expected_ones() -> None:
@@ -73,6 +78,49 @@ def test_the_search_tool_filters_by_use_case() -> None:
     }
 
 
+# Las descripciones de los parámetros de search_products.
+SEARCH_DESCRIPTIONS = {
+    name: parameter["description"]
+    for name, parameter in tool_schemas.SEARCH_PRODUCTS_SCHEMA["function"]["parameters"][
+        "properties"
+    ].items()
+}
+
+
+@pytest.mark.parametrize(
+    ("parameter", "rule"),
+    [
+        # Las reglas de cada filtro viven acá y no en el prompt: es lo que el
+        # modelo lee mientras arma la invocación.
+        ("min_price", "solo si el usuario dijo un piso de precio"),
+        ("min_price", "Nunca igual a max_price"),
+        ("max_price", "Nunca igual a min_price"),
+        ("category", "Solo una de las que enumera este parámetro"),
+        ("recommended_for", "omití el parámetro"),
+        ("search", "en inglés"),
+        ("search", "no es para describir la necesidad del usuario"),
+        ("limit", "Por defecto 5"),
+    ],
+)
+def test_the_schema_of_a_filter_carries_its_own_rule(parameter: str, rule: str) -> None:
+    assert rule.lower() in SEARCH_DESCRIPTIONS[parameter].lower()
+
+
+def test_the_search_tool_says_that_it_does_not_return_the_quantity() -> None:
+    # Garantía del RF-07: el número de stock solo sale de check_availability.
+    description = tool_schemas.SEARCH_PRODUCTS_SCHEMA["function"]["description"]
+
+    assert "no cuántas unidades" in description
+    assert "check_availability" in description
+
+
+def test_the_search_tool_is_also_for_finding_a_product_by_name() -> None:
+    # Dijo que no tenía un producto que existe, sin buscarlo.
+    description = tool_schemas.SEARCH_PRODUCTS_SCHEMA["function"]["description"]
+
+    assert "del que sabés el nombre" in description
+
+
 def test_the_search_tool_has_no_required_parameters() -> None:
     assert tool_schemas.SEARCH_PRODUCTS_SCHEMA["function"]["parameters"]["required"] == []
 
@@ -90,18 +138,32 @@ def test_the_relation_type_offers_the_three_types_of_the_dataset() -> None:
     assert properties["relation_type"]["enum"] == list(catalog_sql.RELATION_TYPES)
 
 
+def test_the_comparison_schema_says_the_same_amount_as_the_tool() -> None:
+    # Si MAX_COMPARE cambia, el texto que lee el modelo tiene que cambiar con él.
+    from backend import tools
+
+    description = tool_schemas.COMPARE_PRODUCTS_SCHEMA["function"]["description"]
+    assert tools.MAX_COMPARE == 3
+    assert "dos o tres productos" in description
+
+
+def test_the_comparison_schema_says_that_the_identifiers_are_internal() -> None:
+    properties = tool_schemas.COMPARE_PRODUCTS_SCHEMA["function"]["parameters"]["properties"]
+
+    assert "no se le preguntan al usuario" in properties["product_ids"]["description"]
+
+
+def test_the_comparison_schema_says_that_it_trims_instead_of_failing() -> None:
+    properties = tool_schemas.COMPARE_PRODUCTS_SCHEMA["function"]["parameters"]["properties"]
+
+    assert "compara los tres primeros" in properties["product_ids"]["description"]
+
+
 def test_the_comparison_takes_a_list_of_identifiers() -> None:
     properties = tool_schemas.COMPARE_PRODUCTS_SCHEMA["function"]["parameters"]["properties"]
 
     assert properties["product_ids"]["type"] == "array"
     assert properties["product_ids"]["items"]["type"] == "string"
-
-
-def test_listing_the_categories_takes_no_parameters() -> None:
-    parameters = tool_schemas.LIST_CATEGORIES_SCHEMA["function"]["parameters"]
-
-    assert parameters["properties"] == {}
-    assert parameters["required"] == []
 
 
 def test_the_identifier_description_warns_against_inventing_one() -> None:

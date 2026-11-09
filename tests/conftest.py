@@ -19,7 +19,50 @@ if str(REPO_ROOT) not in sys.path:
 
 import catalog_data  # noqa: E402  (módulo auxiliar de tests/)
 
-from backend import db  # noqa: E402  (después de ajustar sys.path)
+from backend import api, db  # noqa: E402  (después de ajustar sys.path)
+
+# Las precargas reales, guardadas antes de reemplazarlas, para los tests que
+# verifican el arranque.
+PRELOAD_ASSISTANT = api.preload_assistant
+PRELOAD_VOCABULARY = api.preload_vocabulary
+
+
+@pytest.fixture(autouse=True)
+def without_startup_preloads(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Evita que el arranque de la API busque Ollama o la base real.
+
+    Las dos precargas corren en el lifespan de FastAPI, y `TestClient` lo
+    ejecuta al entrar al bloque `with`: una llama a Ollama y la otra abre la
+    base de `DATABASE_PATH`. Ningún test llama al modelo ni lee la base real,
+    así que se reemplazan por nada. Los tests que verifican el arranque las
+    vuelven a poner.
+    """
+    monkeypatch.setattr(api, "preload_assistant", lambda: None)
+    monkeypatch.setattr(api, "preload_vocabulary", lambda: None)
+
+
+@pytest.fixture
+def with_model_preload(
+    without_startup_preloads: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Vuelve a poner la precarga del modelo, para probar el arranque.
+
+    Depende de la fixture que la reemplaza para correr después de ella. El test
+    que la usa reemplaza `llm.preload_model`, así que tampoco llega a Ollama.
+    """
+    monkeypatch.setattr(api, "preload_assistant", PRELOAD_ASSISTANT)
+
+
+@pytest.fixture
+def with_vocabulary_preload(
+    without_startup_preloads: None, monkeypatch: pytest.MonkeyPatch, catalog_database: Path
+) -> None:
+    """Vuelve a poner la precarga del vocabulario, apuntada a la base de prueba.
+
+    `DATABASE_PATH` se cambia para que el arranque no lea la base real.
+    """
+    monkeypatch.setenv("DATABASE_PATH", str(catalog_database))
+    monkeypatch.setattr(api, "preload_vocabulary", PRELOAD_VOCABULARY)
 
 
 # Devuelve las 8 hojas de un dataset chico y consistente, listo para modificar.

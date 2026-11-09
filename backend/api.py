@@ -1,29 +1,80 @@
-"""Endpoints FastAPI del catálogo.
+"""Aplicación FastAPI: arranque, CORS, endpoints del catálogo y errores.
 
 Cada endpoint delega en `catalog.py`: acá solo se traducen parámetros y errores.
+El endpoint del asistente está en `chat_api.py` y se incluye al final.
 """
 
 from __future__ import annotations
 
+import logging
 import os
 import sqlite3
-from collections.abc import Callable
-from contextlib import AbstractContextManager
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 
 from fastapi import Depends, FastAPI, Path, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
-from backend import catalog, db
+from backend import catalog, chat_api, db, llm, vocabulary
+from backend.dependencies import ConnectionScope, get_connection_scope
 from backend.models import Brand, Category, ProductDetail, ProductPage
+
+logger = logging.getLogger(__name__)
 
 # Origen del frontend de Vite en desarrollo.
 DEFAULT_FRONTEND_ORIGINS = "http://localhost:5173,http://127.0.0.1:5173"
 
+
+# Deja el modelo cargado, sin que un Ollama apagado tire la API.
+def preload_assistant() -> None:
+    """Precarga el modelo del asistente y avisa si no se pudo.
+
+    Cargar el modelo tarda unos segundos y, sin esto, esa espera la paga el
+    primer mensaje del usuario. Pero el catálogo no necesita Ollama: si no está
+    disponible se registra una advertencia y la API arranca igual. El error se
+    devuelve recién al usar el chat, que es lo único que lo necesita.
+    """
+    try:
+        llm.preload_model()
+    except llm.LLMError as error:
+        logger.warning("El asistente va a arrancar en frío: %s", error)
+
+
+# Arma el esquema de las herramientas con los valores que hay en la base.
+def preload_vocabulary() -> None:
+    """Deja armado el vocabulario del catálogo y avisa si no se pudo.
+
+    Las categorías y los casos de uso válidos viajan en el esquema que recibe
+    el modelo, y salen de la base. Si todavía no está cargada se registra una
+    advertencia y se vuelve a intentar en el primer mensaje: el catálogo no
+    necesita esto para andar.
+    """
+    try:
+        with db.connection_scope() as connection:
+            vocabulary.VOCABULARY.schemas(connection)
+    except (db.DatabaseError, sqlite3.Error) as error:
+        logger.warning(
+            "El asistente va a arrancar sin los valores válidos del catálogo. "
+            "Si la base no está cargada, corré: python scripts/load_dataset.py. "
+            "Detalle: %s",
+            error,
+        )
+
+
+@asynccontextmanager
+async def lifespan(application: FastAPI) -> AsyncIterator[None]:
+    """Corre las precargas del asistente cuando arranca la aplicación."""
+    preload_assistant()
+    preload_vocabulary()
+    yield
+
+
 app = FastAPI(
     title="MercaNova",
-    description="Catálogo de productos para el asistente de compras.",
+    description="Catálogo de productos y asistente de compras.",
     version="0.1.0",
+    lifespan=lifespan,
 )
 
 
@@ -44,35 +95,15 @@ def allowed_origins() -> list[str]:
     return [origin.strip() for origin in DEFAULT_FRONTEND_ORIGINS.split(",")]
 
 
-# Sin esto el navegador bloquea los pedidos del frontend. El catálogo es de
-# solo lectura, así que se habilita únicamente GET y no se mandan credenciales.
+# Sin esto el navegador bloquea los pedidos del frontend. El catálogo se lee
+# con GET y el chat manda el mensaje con POST; no se mandan credenciales.
 app.add_middleware(
     CORSMiddleware,
     allow_origins=allowed_origins(),
     allow_credentials=False,
-    allow_methods=["GET"],
+    allow_methods=["GET", "POST"],
     allow_headers=["*"],
 )
-
-
-# Fábrica de conexiones: se llama adentro del endpoint, no antes.
-ConnectionScope = Callable[[], AbstractContextManager[sqlite3.Connection]]
-
-
-def get_connection_scope() -> ConnectionScope:
-    """Entrega la fábrica con la que cada endpoint abre su conexión.
-
-    No devuelve una conexión ya abierta a propósito. FastAPI corre las
-    dependencias sincrónicas y los endpoints sincrónicos como tareas separadas
-    del threadpool, que pueden caer en hilos distintos; una conexión de SQLite
-    creada en la dependencia y usada en el endpoint falla con "SQLite objects
-    created in a thread can only be used in that same thread". Devolviendo la
-    fábrica, cada endpoint abre y cierra la suya en su propio hilo.
-
-    Returns:
-        Un callable que da un context manager con la conexión.
-    """
-    return db.connection_scope
 
 
 # Un producto inexistente es un 404, no un error del servidor.
@@ -189,3 +220,7 @@ def read_brands(
     """Devuelve las marcas del catálogo."""
     with connection_scope() as connection:
         return catalog.list_brands(connection)
+
+
+# Se incluye al final para que el router herede los handlers de errores de arriba.
+app.include_router(chat_api.router)

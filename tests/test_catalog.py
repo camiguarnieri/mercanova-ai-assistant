@@ -393,6 +393,200 @@ def test_a_discontinued_product_can_still_be_consulted_by_its_id(
     assert detail.active is False
 
 
+def test_the_assistant_search_finds_the_same_products(
+    catalog_connection: sqlite3.Connection,
+) -> None:
+    page = catalog.list_products_for_assistant(catalog_connection, category="Monitors")
+
+    assert {item.name for item in page.items} == {"Nova Vision 24", "Flux Vision 27"}
+    assert page.total == 2
+
+
+def test_the_assistant_search_leaves_out_the_discontinued_products(
+    catalog_connection: sqlite3.Connection,
+) -> None:
+    # El asistente no puede recomendar algo que no se vende más.
+    page = catalog.list_products_for_assistant(catalog_connection, category="Headphones")
+
+    assert "Flux Buds" not in {item.name for item in page.items}
+
+
+def test_the_assistant_search_brings_the_price_and_whether_there_is_stock(
+    catalog_connection: sqlite3.Connection,
+) -> None:
+    page = catalog.list_products_for_assistant(catalog_connection, search="Nova Vision 24")
+
+    assert page.items[0].current_price == 468.62
+    assert page.items[0].currency == "USD"
+    # Si hay stock, no cuánto: la cantidad sale de check_availability.
+    assert page.items[0].in_stock is True
+
+
+def test_the_assistant_search_does_not_bring_the_quantity(
+    catalog_connection: sqlite3.Connection,
+) -> None:
+    page = catalog.list_products_for_assistant(catalog_connection, search="Nova Vision 24")
+
+    assert not hasattr(page.items[0], "available_qty")
+
+
+def test_the_assistant_search_reports_a_product_without_stock(
+    catalog_connection: sqlite3.Connection,
+) -> None:
+    # MN-MON-0002 tiene inventario cargado pero 0 disponibles.
+    page = catalog.list_products_for_assistant(catalog_connection, search="Flux Vision 27")
+
+    assert page.items[0].in_stock is False
+
+
+def test_the_assistant_search_brings_both_use_case_fields(
+    catalog_connection: sqlite3.Connection,
+) -> None:
+    page = catalog.list_products_for_assistant(catalog_connection, search="Nova Vision 24")
+
+    assert page.items[0].recommended_for == "office work; programming"
+    assert page.items[0].not_recommended_for == "gaming"
+
+
+def test_the_assistant_search_reports_a_missing_price_as_null(
+    catalog_connection: sqlite3.Connection,
+) -> None:
+    # MN-HDP-0003 no tiene precio ni ninguna fila de inventario.
+    page = catalog.list_products_for_assistant(catalog_connection, search="Nova Sound Lite")
+
+    assert page.items[0].current_price is None
+    assert page.items[0].in_stock is False
+
+
+def test_the_assistant_search_trims_without_losing_the_total(
+    catalog_connection: sqlite3.Connection,
+) -> None:
+    page = catalog.list_products_for_assistant(catalog_connection, limit=1)
+
+    assert len(page.items) == 1
+    # El total sirve para decir "hay más": no es la cantidad devuelta.
+    assert page.total == 4
+
+
+def test_the_assistant_search_without_results_comes_back_empty(
+    catalog_connection: sqlite3.Connection,
+) -> None:
+    page = catalog.list_products_for_assistant(catalog_connection, max_price=1)
+
+    assert page.items == []
+    assert page.total == 0
+
+
+def test_the_assistant_search_rejects_an_inverted_price_range(
+    catalog_connection: sqlite3.Connection,
+) -> None:
+    with pytest.raises(catalog.InvalidFilterError):
+        catalog.list_products_for_assistant(
+            catalog_connection, min_price=500, max_price=100
+        )
+
+
+def test_a_specification_that_is_zero_is_not_lost(
+    catalog_connection: sqlite3.Connection,
+) -> None:
+    # 0 h de batería es un valor del catálogo, no un dato faltante: un
+    # `value_number or ...` o un `if not value` lo borraría en silencio.
+    detail = catalog.get_product(catalog_connection, "MN-HDP-0001")
+
+    battery = next(
+        item for item in detail.specifications if item.attribute_name == "Battery Life"
+    )
+    assert battery.value_number == 0.0
+    assert battery.value_number is not None
+    assert battery.unit == "h"
+
+
+def test_a_specification_with_the_literal_none_is_not_lost(
+    catalog_connection: sqlite3.Connection,
+) -> None:
+    detail = catalog.get_product(catalog_connection, "MN-HDP-0001")
+
+    water = next(
+        item for item in detail.specifications if item.attribute_name == "Water Resistance"
+    )
+    assert water.value_text == "None"
+
+
+def test_lists_the_category_names_without_repeating_them(
+    catalog_connection: sqlite3.Connection,
+) -> None:
+    assert catalog.list_category_names(catalog_connection) == ["Headphones", "Monitors"]
+
+
+def test_lists_the_use_cases_separated_one_by_one(
+    catalog_connection: sqlite3.Connection,
+) -> None:
+    # recommended_for trae "office work; programming" en una sola columna.
+    use_cases = catalog.list_use_cases(catalog_connection)
+
+    assert "office work" in use_cases
+    assert "programming" in use_cases
+    assert "office work; programming" not in use_cases
+
+
+def test_the_use_cases_come_without_repeating_and_ordered(
+    catalog_connection: sqlite3.Connection,
+) -> None:
+    use_cases = catalog.list_use_cases(catalog_connection)
+
+    assert use_cases == sorted(set(use_cases))
+
+
+def test_the_vocabulary_leaves_out_the_discontinued_products(
+    catalog_connection: sqlite3.Connection,
+) -> None:
+    # "Flux Buds" es el único Headphones dado de baja con ese caso de uso.
+    assert "gaming; programming" not in catalog.list_use_cases(catalog_connection)
+
+
+def test_the_use_cases_come_grouped_by_category(
+    catalog_connection: sqlite3.Connection,
+) -> None:
+    grouped = catalog.list_use_cases_by_category(catalog_connection)
+
+    assert grouped == {
+        "Headphones": ["casual listening", "office work", "travel"],
+        "Monitors": ["content creation", "gaming", "office work", "programming"],
+    }
+
+
+def test_the_use_cases_of_a_category_are_only_its_own(
+    catalog_connection: sqlite3.Connection,
+) -> None:
+    # Dos valores válidos pueden no existir juntos: 'gaming' es de Monitors.
+    use_cases = catalog.list_use_cases(catalog_connection, "Headphones")
+
+    assert "travel" in use_cases
+    assert "gaming" not in use_cases
+
+
+@pytest.mark.parametrize("category", ["headphones", "HEADPHONES", " Headphones "])
+def test_the_use_cases_of_a_category_ignore_the_case(
+    catalog_connection: sqlite3.Connection, category: str
+) -> None:
+    assert "travel" in catalog.list_use_cases(catalog_connection, category)
+
+
+def test_a_category_that_does_not_exist_has_no_use_cases(
+    catalog_connection: sqlite3.Connection,
+) -> None:
+    assert catalog.list_use_cases(catalog_connection, "Earphones") == []
+
+
+def test_the_global_use_cases_are_the_union_of_the_categories(
+    catalog_connection: sqlite3.Connection,
+) -> None:
+    grouped = catalog.list_use_cases_by_category(catalog_connection)
+    union = {use_case for use_cases in grouped.values() for use_case in use_cases}
+
+    assert catalog.list_use_cases(catalog_connection) == sorted(union)
+
+
 def test_lists_the_categories_with_their_subcategories(
     catalog_connection: sqlite3.Connection,
 ) -> None:

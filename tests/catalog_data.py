@@ -39,6 +39,7 @@ def product(
     active: int,
     recommended_for: str,
     tags: str,
+    not_recommended_for: str | None = None,
 ) -> tuple[object, ...]:
     """Devuelve una fila de `products` lista para insertar."""
     return (
@@ -52,7 +53,7 @@ def product(
         f"{name}, resumen de una línea.",
         description,
         recommended_for,
-        None,
+        not_recommended_for,
         "24-inch; IPS",
         tags,
         "Black",
@@ -86,6 +87,9 @@ PRODUCTS = [
         1,
         "office work; programming",
         "monitor; display; qhd",
+        # El único con not_recommended_for cargado: el asistente tiene que
+        # avisarlo si el usuario quiere justo eso.
+        not_recommended_for="gaming",
     ),
     product(
         "MN-MON-0002",
@@ -175,6 +179,10 @@ SPECIFICATIONS = [
     # "None" es un valor real: el producto no es resistente al agua.
     ("MN-HDP-0001", "Durability", "Water Resistance", "None", None, None),
     ("MN-HDP-0001", "Audio", "Driver", None, 40.0, "mm"),
+    # El 0 es un valor real, como en el catálogo de la cátedra: significa 0 h de
+    # batería, no que falte el dato. Un `if not value` lo borraría en silencio.
+    ("MN-HDP-0001", "Battery", "Battery Life", None, 0.0, "h"),
+    ("MN-HDP-0002", "Battery", "Battery Life", None, 26.0, "h"),
 ]
 
 

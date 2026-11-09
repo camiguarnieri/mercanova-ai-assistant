@@ -7,9 +7,10 @@ es de `tools.py`, y acá solo se la llama.
 from __future__ import annotations
 
 import sqlite3
+from collections.abc import Iterable
 from typing import Any
 
-from backend import catalog, tool_schemas, tools
+from backend import catalog, provenance, tool_arguments, tool_schemas, tools
 
 # Qué función implementa cada herramienta del esquema.
 IMPLEMENTATIONS = {
@@ -18,7 +19,6 @@ IMPLEMENTATIONS = {
     tool_schemas.CHECK_AVAILABILITY: tools.check_availability,
     tool_schemas.COMPARE_PRODUCTS: tools.compare_products,
     tool_schemas.GET_RELATED_PRODUCTS: tools.get_related_products,
-    tool_schemas.LIST_CATEGORIES: tools.list_categories,
 }
 
 # Los parámetros declarados de cada herramienta, para validar contra el mismo
@@ -37,42 +37,73 @@ def validate_arguments(name: str, arguments: dict[str, Any]) -> dict[str, Any]:
         name: Nombre de la herramienta.
         arguments: Argumentos tal como los mandó el modelo.
 
+    Primero se normaliza lo que mandó el modelo —se tiran los ausentes y se
+    convierten los números que vinieron como texto— y recién después se exige
+    lo obligatorio: un 'null' en un parámetro opcional no es un error, es la
+    manera en que un modelo chico dice que no lo usa.
+
     Returns:
-        Los argumentos sin los vacíos, que el modelo suele mandar igual.
+        Los argumentos listos para invocar la herramienta.
 
     Raises:
         tools.UnknownToolError: Si la herramienta no existe.
-        tools.ToolArgumentError: Si sobra o falta un argumento.
+        tools.ToolArgumentError: Si sobra un argumento, falta uno obligatorio o
+            uno numérico no se puede convertir.
     """
     if name not in SCHEMA_BY_NAME:
         raise tools.UnknownToolError(
-            f"La herramienta '{name}' no existe. "
-            f"Las disponibles son: {', '.join(tool_schemas.TOOL_NAMES)}."
+            f"Volvé a intentar con una de las herramientas que existen: "
+            f"{', '.join(tool_schemas.TOOL_NAMES)}. '{name}' no es ninguna de esas."
         )
 
     schema = SCHEMA_BY_NAME[name]
     unknown = sorted(set(arguments) - set(schema["properties"]))
     if unknown:
-        allowed = ", ".join(schema["properties"]) or "ninguno"
+        allowed = ", ".join(schema["properties"])
         raise tools.ToolArgumentError(
-            f"La herramienta '{name}' no acepta el argumento {unknown[0]!r}. "
+            f"Volvé a invocar '{name}' sin el argumento {unknown[0]!r}, que no existe. "
             f"Los que acepta son: {allowed}."
         )
 
-    cleaned = {
-        key: value for key, value in arguments.items() if value is not None and value != ""
-    }
+    cleaned = tool_arguments.normalize_arguments(name, schema["properties"], arguments)
     missing = [parameter for parameter in schema["required"] if parameter not in cleaned]
     if missing:
         raise tools.ToolArgumentError(
-            f"La herramienta '{name}' necesita el argumento '{missing[0]}' y no llegó."
+            f"Volvé a invocar '{name}' con el argumento '{missing[0]}', que es "
+            f"obligatorio y no llegó."
         )
     return cleaned
 
 
+# Devuelve los argumentos como quedaron, para poder mostrarlos en la interfaz.
+def arguments_for_trace(name: str, arguments: dict[str, Any]) -> dict[str, Any]:
+    """Normaliza los argumentos de una invocación solo para mostrarlos.
+
+    La interfaz muestra con qué se consultó el catálogo, así que conviene
+    mostrar los argumentos con los que se corrió la herramienta y no los
+    'null' que el modelo manda de más. Si no se pueden validar, se devuelven
+    tal como llegaron: la traza tiene que mostrar lo que pasó, no una versión
+    prolija de lo que pasó.
+
+    Args:
+        name: Nombre de la herramienta que pidió el modelo.
+        arguments: Argumentos de la invocación.
+
+    Returns:
+        Los argumentos normalizados, o los originales si la validación falla.
+    """
+    try:
+        return validate_arguments(name, arguments)
+    except tools.ToolError:
+        return dict(arguments)
+
+
 # Ejecuta la herramienta que pidió el modelo y nunca lo deja sin respuesta.
 def run_tool(
-    connection: sqlite3.Connection, name: str, arguments: dict[str, Any]
+    connection: sqlite3.Connection,
+    name: str,
+    arguments: dict[str, Any],
+    known_products: Iterable[str] | None = None,
 ) -> dict[str, Any]:
     """Corre una herramienta por nombre.
 
@@ -83,6 +114,11 @@ def run_tool(
         connection: Conexión abierta con `db.connect()`.
         name: Nombre de la herramienta que pidió el modelo.
         arguments: Argumentos de la invocación.
+        known_products: Los product_id que aparecieron en resultados de esta
+            conversación. Si se pasan, un identificador que no esté entre
+            ellos no se ejecuta: el modelo lo inventó. Si es `None` no se
+            revisa la procedencia, que es lo que hace falta para probar una
+            herramienta sola.
 
     Returns:
         El resultado de la herramienta, o un diccionario con `error` explicando
@@ -90,6 +126,8 @@ def run_tool(
     """
     try:
         cleaned = validate_arguments(name, arguments)
+        if known_products is not None:
+            provenance.check_ids(cleaned, known_products)
         return IMPLEMENTATIONS[name](connection, **cleaned)
     except (tools.ToolError, catalog.CatalogError) as error:
         return {"found": False, "error": str(error)}

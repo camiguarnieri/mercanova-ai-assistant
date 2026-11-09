@@ -16,6 +16,19 @@ SUMMARY_COLUMNS = """
     COALESCE(stock.available_qty, 0) AS available_qty
 """
 
+# Columnas del resumen que lee el asistente, con los campos de ProductSummary.
+# Son menos que las del catálogo a propósito: lo que no está acá no entra en la
+# ventana de contexto del modelo ni en el tiempo que tarda en leerlo.
+# El stock viaja como booleano y no como número: así una cantidad solo puede
+# salir de check_availability, que la consulta en el momento. Con el número acá,
+# el modelo lo repetía turnos después como si lo hubiera vuelto a consultar.
+ASSISTANT_COLUMNS = """
+    p.product_id, p.name, p.brand, p.category,
+    p.recommended_for, p.not_recommended_for,
+    pr.currency, pr.current_price,
+    COALESCE(stock.available_qty, 0) > 0 AS in_stock
+"""
+
 # Columnas que agrega la ficha completa, con los campos de ProductDetail.
 DETAIL_COLUMNS = """,
     p.description, p.not_recommended_for, p.key_features, p.tags,
@@ -66,6 +79,27 @@ CATEGORIES_QUERY = """
 SELECT category_id, category_name, subcategory_id, subcategory_name, department
 FROM categories
 ORDER BY category_name, subcategory_name
+"""
+
+# El vocabulario que recibe el modelo sale de estas dos consultas, no de una
+# lista escrita a mano: si el catálogo cambia, el esquema cambia con él. Solo
+# los productos activos, porque son los únicos que el asistente puede recomendar.
+CATEGORY_NAMES_QUERY = """
+SELECT DISTINCT category
+FROM products
+WHERE active = 1 AND category IS NOT NULL AND TRIM(category) <> ''
+ORDER BY category
+"""
+
+# Los casos de uso van con su categoría porque no son globales: 'video calls'
+# existe en Webcams y no en Headphones, y el modelo tiene que ver esa diferencia
+# antes de combinar los dos filtros. recommended_for trae varios usos en una
+# sola columna, separados por punto y coma, y quien llama los separa.
+USE_CASES_QUERY = """
+SELECT DISTINCT category, recommended_for
+FROM products
+WHERE active = 1 AND recommended_for IS NOT NULL AND TRIM(recommended_for) <> ''
+ORDER BY category
 """
 
 BRANDS_QUERY = """
