@@ -16,7 +16,7 @@ from fastapi import Depends, FastAPI, Path, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
-from backend import catalog, chat_api, db, llm, vocabulary
+from backend import cart, cart_api, catalog, chat_api, db, inventory, llm, orders, vocabulary
 from backend.dependencies import ConnectionScope, get_connection_scope
 from backend.models import Brand, Category, ProductDetail, ProductPage
 
@@ -62,9 +62,33 @@ def preload_vocabulary() -> None:
         )
 
 
+# Deja creadas las tablas que la aplicación escribe, sin tocar las cargadas.
+def ensure_schema() -> None:
+    """Aplica el esquema sobre la base configurada y avisa si no se pudo.
+
+    `schema.sql` es idempotente —todo es `IF NOT EXISTS`—, así que esto no
+    toca ni borra el catálogo ya cargado. Está para las bases que se cargaron
+    antes de que existieran `orders` y `order_items`: sin esto, el primer
+    checkout fallaría con un error de SQLite en vez de funcionar.
+
+    Si la base no se puede abrir se registra una advertencia y la API arranca
+    igual, como con las otras precargas.
+    """
+    try:
+        with db.connection_scope() as connection:
+            db.create_schema(connection)
+    except (db.DatabaseError, sqlite3.Error) as error:
+        logger.warning(
+            "No se pudo verificar el esquema de la base. Si todavía no está cargada, "
+            "corré: python scripts/load_dataset.py. Detalle: %s",
+            error,
+        )
+
+
 @asynccontextmanager
 async def lifespan(application: FastAPI) -> AsyncIterator[None]:
     """Corre las precargas del asistente cuando arranca la aplicación."""
+    ensure_schema()
     preload_assistant()
     preload_vocabulary()
     yield
@@ -96,12 +120,13 @@ def allowed_origins() -> list[str]:
 
 
 # Sin esto el navegador bloquea los pedidos del frontend. El catálogo se lee
-# con GET y el chat manda el mensaje con POST; no se mandan credenciales.
+# con GET, el chat y el checkout mandan con POST, y el carrito cambia una
+# cantidad con PUT y saca un producto con DELETE; no se mandan credenciales.
 app.add_middleware(
     CORSMiddleware,
     allow_origins=allowed_origins(),
     allow_credentials=False,
-    allow_methods=["GET", "POST"],
+    allow_methods=["GET", "POST", "PUT", "DELETE"],
     allow_headers=["*"],
 )
 
@@ -120,6 +145,39 @@ def handle_product_not_found(
 def handle_invalid_filter(request: Request, error: catalog.InvalidFilterError) -> JSONResponse:
     """Traduce `InvalidFilterError` a un 422 con el mensaje de la excepción."""
     return JSONResponse(status_code=422, content={"detail": str(error)})
+
+
+# Una cantidad que no es un entero mayor a 0 es un pedido mal armado (RF-17).
+@app.exception_handler(cart.InvalidQuantityError)
+def handle_invalid_quantity(request: Request, error: cart.InvalidQuantityError) -> JSONResponse:
+    """Traduce `InvalidQuantityError` a un 422 con el mensaje de la excepción."""
+    return JSONResponse(status_code=422, content={"detail": str(error)})
+
+
+# Tocar una línea que no está en el carrito es un 404, como un producto que no existe.
+@app.exception_handler(cart.ProductNotInCartError)
+def handle_product_not_in_cart(
+    request: Request, error: cart.ProductNotInCartError
+) -> JSONResponse:
+    """Traduce `ProductNotInCartError` a un 404 con el mensaje de la excepción."""
+    return JSONResponse(status_code=404, content={"detail": str(error)})
+
+
+# Una orden inexistente es un 404.
+@app.exception_handler(orders.OrderNotFoundError)
+def handle_order_not_found(request: Request, error: orders.OrderNotFoundError) -> JSONResponse:
+    """Traduce `OrderNotFoundError` a un 404 con el mensaje de la excepción."""
+    return JSONResponse(status_code=404, content={"detail": str(error)})
+
+
+# Sin stock, carrito vacío o monedas mezcladas: el pedido es válido pero el
+# estado del sistema no lo permite ahora. Eso es un 409, no un 500.
+@app.exception_handler(cart.CartError)
+@app.exception_handler(orders.OrderError)
+@app.exception_handler(inventory.StockWriteError)
+def handle_cart_conflict(request: Request, error: Exception) -> JSONResponse:
+    """Traduce los conflictos del carrito y del checkout a un 409 accionable."""
+    return JSONResponse(status_code=409, content={"detail": str(error)})
 
 
 # Si la base no está cargada, se dice cómo cargarla en vez de fallar seco.
@@ -222,5 +280,6 @@ def read_brands(
         return catalog.list_brands(connection)
 
 
-# Se incluye al final para que el router herede los handlers de errores de arriba.
+# Se incluyen al final para que los routers hereden los handlers de arriba.
 app.include_router(chat_api.router)
+app.include_router(cart_api.router)

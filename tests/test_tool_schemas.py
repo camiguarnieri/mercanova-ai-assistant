@@ -14,11 +14,20 @@ EXPECTED_NAMES = [
     "check_availability",
     "compare_products",
     "get_related_products",
+    "add_to_cart",
+    "remove_from_cart",
 ]
 
 
-def test_there_are_five_tools() -> None:
-    assert len(tool_schemas.TOOL_SCHEMAS) == 5
+def test_there_are_seven_tools() -> None:
+    assert len(tool_schemas.TOOL_SCHEMAS) == 7
+
+
+def test_the_cart_tools_are_the_only_ones_that_write() -> None:
+    # Confirmar la compra no es una herramienta: la orden la crea el usuario
+    # desde la interfaz, no el modelo.
+    assert set(tool_schemas.CART_TOOL_NAMES) == {"add_to_cart", "remove_from_cart"}
+    assert "checkout" not in tool_schemas.TOOL_NAMES
 
 
 def test_the_categories_are_not_a_tool_of_their_own() -> None:

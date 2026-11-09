@@ -31,12 +31,13 @@ PRELOAD_VOCABULARY = api.preload_vocabulary
 def without_startup_preloads(monkeypatch: pytest.MonkeyPatch) -> None:
     """Evita que el arranque de la API busque Ollama o la base real.
 
-    Las dos precargas corren en el lifespan de FastAPI, y `TestClient` lo
-    ejecuta al entrar al bloque `with`: una llama a Ollama y la otra abre la
-    base de `DATABASE_PATH`. Ningún test llama al modelo ni lee la base real,
-    así que se reemplazan por nada. Los tests que verifican el arranque las
-    vuelven a poner.
+    Los tres pasos del arranque corren en el lifespan de FastAPI, y
+    `TestClient` lo ejecuta al entrar al bloque `with`: uno llama a Ollama y
+    los otros dos abren la base de `DATABASE_PATH`. Ningún test llama al
+    modelo ni toca la base real, así que se reemplazan por nada. Los tests que
+    verifican el arranque los vuelven a poner.
     """
+    monkeypatch.setattr(api, "ensure_schema", lambda: None)
     monkeypatch.setattr(api, "preload_assistant", lambda: None)
     monkeypatch.setattr(api, "preload_vocabulary", lambda: None)
 

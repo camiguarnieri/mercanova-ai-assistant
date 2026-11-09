@@ -7,10 +7,11 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException
 
-from backend import assistant, llm, sessions, vocabulary
+from backend import assistant, carts, llm, sessions, vocabulary
 from backend.chat_models import ChatRequest, ChatResponse
 from backend.dependencies import (
     ConnectionScope,
+    get_cart_store,
     get_connection_scope,
     get_session_store,
     get_vocabulary,
@@ -36,6 +37,7 @@ def post_chat(
     request: ChatRequest,
     connection_scope: ConnectionScope = Depends(get_connection_scope),
     store: sessions.SessionStore = Depends(get_session_store),
+    cart_store: carts.CartStore = Depends(get_cart_store),
     terms: vocabulary.Vocabulary = Depends(get_vocabulary),
 ) -> ChatResponse:
     """Contesta un mensaje y devuelve las herramientas que usó para contestarlo.
@@ -43,6 +45,12 @@ def post_chat(
     La conversación se guarda en el servidor, en memoria, indexada por
     `session_id`: **se pierde cuando se reinicia la API**. El cliente solo
     manda el mensaje nuevo, no el historial.
+
+    El asistente puede agregar y quitar productos del carrito de esa misma
+    sesión. El carrito no viaja en esta respuesta: lo devuelve `GET /cart`, que
+    es el único lugar donde se arma, así la pantalla y el asistente no pueden
+    mostrar dos carritos distintos. El frontend lo vuelve a pedir cuando
+    `tools_used` trae una herramienta del carrito.
 
     Los errores de la capa del modelo se devuelven como 503 con el mensaje
     accionable que trae la excepción, para que el frontend lo muestre tal cual
@@ -56,6 +64,7 @@ def post_chat(
                 request.session_id,
                 request.message,
                 vocabulary=terms,
+                carts=cart_store,
             )
         except llm.LLMError as error:
             raise HTTPException(

@@ -97,6 +97,20 @@ RECOMENDAR
 - Si in_stock es false, avisalo y ofrecé una alternativa.
 - Máximo tres productos por respuesta. Sé breve."""
 
+# El carrito NO tiene bloque propio acá a propósito. Las reglas del carrito
+# —agregar solo cuando el usuario lo pide, repetir el total que devolvió la
+# herramienta, no confirmar la compra ni pedir nombre y dirección— están en la
+# descripción de `add_to_cart` y `remove_from_cart`, en `tool_schemas.py`, que
+# viaja al modelo en cada pedido igual que esto.
+#
+# El motivo es el presupuesto que verifica `tests/test_prompts.py`: el prompt
+# está a 880 tokens de los 900 que se fijaron tras medir el techo de
+# instrucciones del modelo, y cada regla nueva tiene que sacar otra. Las que
+# podría haber sacado son las tres que ese archivo justifica con una falla
+# observada, así que la regla del carrito se puso donde no compite con ellas.
+# Si el equipo prefiere un bloque CARRITO en el prompt, hay que decidir qué
+# regla sale: no entran las dos cosas.
+
 SYSTEM_PROMPT = f"""\
 Sos el asistente de compras de MercaNova, tienda de tecnología.
 

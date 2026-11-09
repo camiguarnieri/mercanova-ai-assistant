@@ -15,6 +15,15 @@ GET_PRODUCT_DETAILS = "get_product_details"
 CHECK_AVAILABILITY = "check_availability"
 COMPARE_PRODUCTS = "compare_products"
 GET_RELATED_PRODUCTS = "get_related_products"
+ADD_TO_CART = "add_to_cart"
+REMOVE_FROM_CART = "remove_from_cart"
+
+# Las herramientas que escriben el carrito de la sesión. Están separadas porque
+# necesitan saber de qué conversación es el carrito, y porque son las únicas
+# que cambian algo: las demás solo leen el catálogo. Confirmar la compra no es
+# ninguna de estas, y no existe como herramienta a propósito: la orden la crea
+# el usuario desde la interfaz.
+CART_TOOL_NAMES: tuple[str, ...] = (ADD_TO_CART, REMOVE_FROM_CART)
 
 # Texto que se repite en los parámetros que esperan un identificador.
 PRODUCT_ID_DESCRIPTION = (
@@ -239,7 +248,41 @@ GET_RELATED_PRODUCTS_SCHEMA = tool(
     ["product_id"],
 )
 
-# Arma las cinco definiciones con el vocabulario que tenga el catálogo.
+ADD_TO_CART_SCHEMA = tool(
+    ADD_TO_CART,
+    "Agrega un producto al carrito del usuario. Usala cuando el usuario dice que quiere "
+    "comprar, llevar o agregar un producto que le mostraste. El sistema valida el stock "
+    "contra la base antes de agregarlo y te devuelve cómo quedó el carrito, con el total "
+    "ya calculado: repetí ese total, no lo sumes vos. Si no hay unidades suficientes, la "
+    "herramienta falla y te dice cuántas hay. No confirma la compra: eso lo hace el "
+    "usuario desde el carrito en pantalla. Vos nunca cerrás una compra: no le pidas "
+    "nombre ni dirección, no digas que la compra está hecha ni que hay una orden; para "
+    "terminar, decile que revise el carrito en pantalla y confirme ahí.",
+    {
+        "product_id": {"type": "string", "description": PRODUCT_ID_DESCRIPTION},
+        "quantity": {
+            "type": "integer",
+            "description": (
+                "Unidades a agregar, mayor a 0. Si el usuario no dijo cuántas, mandá 1. "
+                "Se suman a las que ya tenga el producto en el carrito."
+            ),
+        },
+    },
+    ["product_id"],
+)
+
+REMOVE_FROM_CART_SCHEMA = tool(
+    REMOVE_FROM_CART,
+    "Saca un producto del carrito del usuario, con todas sus unidades. Usala cuando el "
+    "usuario dice que no lo quiere más o que lo saques. Te devuelve cómo quedó el "
+    "carrito. Para dejar menos unidades de un producto, no uses esta herramienta: "
+    "decile al usuario que cambie la cantidad desde el carrito.",
+    {"product_id": {"type": "string", "description": PRODUCT_ID_DESCRIPTION}},
+    ["product_id"],
+)
+
+
+# Arma las siete definiciones con el vocabulario que tenga el catálogo.
 def build_tool_schemas(
     categories: Sequence[str] = (),
     grouped_use_cases: Mapping[str, Sequence[str]] | None = None,
@@ -252,9 +295,10 @@ def build_tool_schemas(
             `catalog.list_use_cases_by_category()`.
 
     Returns:
-        Las cinco definiciones, en el orden en que las lee el modelo. Sin
-        vocabulario devuelve las mismas herramientas sin las listas de valores:
-        el asistente sigue funcionando, solo con menos ayuda.
+        Las siete definiciones, en el orden en que las lee el modelo: primero
+        las cinco que leen el catálogo y después las dos que escriben el
+        carrito. Sin vocabulario devuelve las mismas herramientas sin las
+        listas de valores: el asistente sigue funcionando, solo con menos ayuda.
     """
     return [
         search_products_schema(categories, grouped_use_cases or {}),
@@ -262,6 +306,8 @@ def build_tool_schemas(
         CHECK_AVAILABILITY_SCHEMA,
         COMPARE_PRODUCTS_SCHEMA,
         GET_RELATED_PRODUCTS_SCHEMA,
+        ADD_TO_CART_SCHEMA,
+        REMOVE_FROM_CART_SCHEMA,
     ]
 
 

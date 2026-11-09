@@ -13,6 +13,7 @@ from typing import Any
 from ollama import Client
 
 from backend import llm, model_view, product_lookup, provenance, tool_router, tool_schemas
+from backend.carts import CartSession, CartStore
 from backend.chat_models import AssistantTurn, Comparison, ShownProduct, ToolInvocation
 from backend.sessions import Message, SessionStore
 from backend.vocabulary import Vocabulary
@@ -142,6 +143,7 @@ def respond(
     message: str,
     *,
     vocabulary: Vocabulary,
+    carts: CartStore | None = None,
     client: Client | None = None,
 ) -> AssistantTurn:
     """Corre un turno de la conversación de una sesión.
@@ -167,6 +169,11 @@ def respond(
         message: Lo que escribió el usuario.
         vocabulary: De dónde salen las definiciones de las herramientas, con
             los valores válidos del catálogo adentro.
+        carts: Dónde están guardados los carritos. El de esta sesión es el
+            único que el modelo puede tocar, y lo ata el servidor: el
+            `session_id` no es un argumento de la herramienta. Si es `None`,
+            las herramientas del carrito devuelven un error y la conversación
+            sigue con las que leen el catálogo.
         client: Cliente de Ollama. Si es `None`, `llm` crea uno.
 
     Returns:
@@ -183,12 +190,17 @@ def respond(
     # anteriores y crece con cada resultado: una herramienta no acepta un
     # identificador que no esté acá.
     known_products = store.known_products(session_id)
+    # El carrito que pueden escribir las herramientas es el de esta sesión y
+    # ninguno más: el modelo no elige de cuál se trata.
+    cart_session = None if carts is None else CartSession(carts, session_id)
 
     # Se envuelve el router para anotar qué se ejecutó, sin que `llm` tenga que
     # saber nada de esto. Se anotan los argumentos ya normalizados: son los que
     # usó la herramienta.
     def execute_tool(name: str, arguments: dict[str, Any]) -> Any:
-        result = tool_router.run_tool(connection, name, arguments, known_products)
+        result = tool_router.run_tool(
+            connection, name, arguments, known_products, cart_session
+        )
         known_products.update(provenance.collect_ids(result))
         comparison = comparison_of(name, result)
         if comparison is not None:
