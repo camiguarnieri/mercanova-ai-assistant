@@ -79,6 +79,7 @@ ESPECIFICACIONES
 - El texto "None" es un valor real: el producto NO tiene esa característica.
 - Un value_number en 0 también es un dato real: reportalo como 0 con su unidad.
 - "No hay información" se dice solo si el campo no vino.
+- Reportá el valor y nada más: no expliques por qué ni qué implica.
 - Cada una trae valor en value_text o en value_number, nunca en las dos; si es
   numérico, la unidad va en unit."""
 
@@ -93,7 +94,6 @@ RECOMENDAR
 - Si ya tenés con qué, recomendá sin preguntar más.
 - Explicá por qué le sirve con su recommended_for, el precio y el stock que
   consultaste.
-- Si el not_recommended_for desaconseja lo que quiere, decíselo.
 - Si in_stock es false, avisalo y ofrecé una alternativa.
 - Máximo tres productos por respuesta. Sé breve."""
 

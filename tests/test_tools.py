@@ -562,17 +562,37 @@ def test_the_availability_adds_up_the_warehouses(
 
 @pytest.mark.parametrize(
     ("available", "expected"),
-    [(1, "Hay 1 unidad disponible."), (2, "Hay 2 unidades disponibles.")],
+    [
+        (1, "Nova Vision 24: hay 1 unidad disponible."),
+        (2, "Nova Vision 24: hay 2 unidades disponibles."),
+    ],
 )
 def test_the_message_of_the_stock_agrees_in_number(available: int, expected: str) -> None:
     # El modelo repite este texto casi literal: "1 unidades" lo lee el usuario.
-    assert tools.stock_message(available) == expected
+    assert tools.stock_message("Nova Vision 24", available) == expected
 
 
 def test_the_message_without_stock_does_not_say_a_number() -> None:
-    assert tools.stock_message(0) == (
-        "No hay stock disponible de este producto en ningún depósito."
+    assert tools.stock_message("Nova Vision 24", 0) == (
+        "Nova Vision 24: no hay stock disponible en ningún depósito."
     )
+
+
+@pytest.mark.parametrize("available", [0, 1, 7])
+def test_the_message_of_the_stock_names_its_product(available: int) -> None:
+    # Sin el nombre, el modelo le puso "7 unidades disponibles" a dos productos
+    # a la vez: el número era de uno y la frase no decía de cuál.
+    assert tools.stock_message("Aether Sound 880", available).startswith(
+        "Aether Sound 880:"
+    )
+
+
+def test_the_availability_message_names_the_product_that_was_consulted(
+    catalog_connection: sqlite3.Connection,
+) -> None:
+    result = tools.check_availability(catalog_connection, "MN-MON-0001")
+
+    assert result["message"] == "Nova Vision 24: hay 10 unidades disponibles."
 
 
 def test_the_availability_of_a_product_without_stock_says_there_is_none(
@@ -582,7 +602,7 @@ def test_the_availability_of_a_product_without_stock_says_there_is_none(
 
     assert result["available_qty"] == 0
     assert result["in_stock"] is False
-    assert "No hay stock" in result["message"]
+    assert result["message"] == "Flux Vision 27: no hay stock disponible en ningún depósito."
 
 
 def test_the_availability_of_a_product_without_inventory_is_zero(

@@ -199,24 +199,31 @@ def without_quantity(product: dict[str, Any]) -> dict[str, Any]:
     return fields
 
 
-# Escribe el stock en una frase que concuerde en número.
-def stock_message(available: int) -> str:
+# Escribe el stock atado a su producto y con la concordancia correcta.
+def stock_message(name: str, available: int) -> str:
     """Arma el mensaje del stock para que el modelo lo lea bien escrito.
+
+    El número va con el nombre del producto adelante. Sin el nombre, el modelo
+    le puso "7 unidades disponibles" a dos productos a la vez: el 7 era de uno
+    y la frase del turno anterior no decía de cuál. Es el mismo mecanismo que
+    arregló las especificaciones cruzadas en `compare_products`, atar el dato a
+    su dueño.
 
     El modelo repite este texto casi literal, así que si dice "1 unidades" el
     usuario lee "1 unidades".
 
     Args:
+        name: Nombre comercial del producto al que pertenece la cantidad.
         available: Unidades disponibles, sumando los depósitos.
 
     Returns:
-        La frase con la concordancia que corresponde.
+        La frase con el nombre adelante y la concordancia que corresponde.
     """
     if available == 0:
-        return "No hay stock disponible de este producto en ningún depósito."
+        return f"{name}: no hay stock disponible en ningún depósito."
     if available == 1:
-        return "Hay 1 unidad disponible."
-    return f"Hay {available} unidades disponibles."
+        return f"{name}: hay 1 unidad disponible."
+    return f"{name}: hay {available} unidades disponibles."
 
 
 # Consulta el stock actual del producto, sumando los depósitos.
@@ -243,7 +250,7 @@ def check_availability(connection: sqlite3.Connection, product_id: str) -> dict[
         "available_qty": available,
         "in_stock": available > 0,
         "active": detail.active,
-        "message": stock_message(available),
+        "message": stock_message(detail.name, available),
     }
 
 

@@ -232,8 +232,17 @@ def test_the_prompt_mentions_the_price_and_the_stock_that_were_consulted() -> No
     assert "el precio y el stock que consultaste" in PROMPT
 
 
-def test_the_prompt_asks_to_warn_about_what_it_is_not_recommended_for() -> None:
-    assert "Si el not_recommended_for desaconseja lo que quiere, decíselo" in PROMPT
+def test_the_prompt_does_not_ask_for_a_field_the_model_no_longer_receives() -> None:
+    # not_recommended_for dejó de viajar al modelo (backend/model_view.py):
+    # pedirle que lo use sería mandarlo a buscar un campo que no está.
+    assert "not_recommended_for" not in PROMPT
+
+
+def test_the_prompt_forbids_explaining_the_cause_of_a_value() -> None:
+    # Con "0 h" dijo "es una opción sin batería" y "dependen de un cargador
+    # externo". El catálogo da el valor, no la causa.
+    assert "Reportá el valor y nada más" in PROMPT
+    assert "no expliques por qué ni qué implica" in PROMPT
 
 
 def test_the_prompt_asks_to_warn_when_there_is_no_stock() -> None:

@@ -12,7 +12,7 @@ from typing import Any
 
 from ollama import Client
 
-from backend import llm, product_lookup, provenance, tool_router, tool_schemas
+from backend import llm, model_view, product_lookup, provenance, tool_router, tool_schemas
 from backend.chat_models import AssistantTurn, Comparison, ShownProduct, ToolInvocation
 from backend.sessions import Message, SessionStore
 from backend.vocabulary import Vocabulary
@@ -45,9 +45,13 @@ def build_messages(history: list[Message] | None, message: str) -> list[Message]
 def tool_message(name: str, result: Any) -> Message:
     """Arma el mensaje con rol `tool` que ve el modelo.
 
+    El resultado pasa por `model_view.for_the_model()`: la interfaz lo usa
+    entero y al modelo le llega sin los campos que se le cruzaban de un
+    producto a otro.
+
     Args:
         name: Nombre con el que se identifica la consulta.
-        result: Lo que devolvió.
+        result: Lo que devolvió, completo.
 
     Returns:
         El mensaje en el formato de Ollama, con el resultado en JSON.
@@ -55,7 +59,9 @@ def tool_message(name: str, result: Any) -> Message:
     return {
         "role": "tool",
         "tool_name": name,
-        "content": json.dumps(result, ensure_ascii=False, default=str),
+        "content": json.dumps(
+            model_view.for_the_model(result), ensure_ascii=False, default=str
+        ),
     }
 
 
@@ -148,6 +154,9 @@ def respond(
     conversación, así que el modelo no puede inventar uno ni acertarlo de
     casualidad.
 
+    Lo que devuelve cada herramienta se usa entero para armar las tarjetas y la
+    tabla, y al modelo le llega filtrado por `model_view.for_the_model()`.
+
     Si el turno falla, la sesión queda como estaba: no se guarda una
     conversación a medias ni los identificadores que aparecieron en ella.
 
@@ -189,7 +198,9 @@ def respond(
         used.append(
             ToolInvocation(name=name, arguments=tool_router.arguments_for_trace(name, arguments))
         )
-        return result
+        # La tarjeta y la tabla se arman con el resultado entero, de arriba; al
+        # modelo le vuelve sin los campos que se le cruzaban entre productos.
+        return model_view.for_the_model(result)
 
     messages = build_messages(store.history(session_id), message)
 
