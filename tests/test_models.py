@@ -13,6 +13,8 @@ from backend.models import (
     Product,
     ProductDetail,
     ProductPage,
+    ProductSummary,
+    ProductSummaryPage,
     Specification,
 )
 
@@ -26,6 +28,16 @@ PRODUCT_FIELDS = {
     "subcategory": "Office",
     "available_qty": 10,
     "active": True,
+}
+
+# Campos mínimos del resumen que lee el modelo. El stock es booleano: la
+# cantidad solo sale de check_availability.
+SUMMARY_FIELDS = {
+    "product_id": "MN-MON-0001",
+    "name": "Nova Vision 24",
+    "brand": "NovaTech",
+    "category": "Monitors",
+    "in_stock": True,
 }
 
 
@@ -48,6 +60,7 @@ def test_a_product_without_a_required_field_is_rejected(field: str) -> None:
     "model, fields",
     [
         (Product, PRODUCT_FIELDS),
+        (ProductSummary, SUMMARY_FIELDS),
         (Brand, {"brand_id": "BR001", "brand_name": "NovaTech"}),
         (Specification, {"attribute_group": "Display", "attribute_name": "Panel"}),
     ],
@@ -146,6 +159,53 @@ def test_a_category_without_a_required_field_is_rejected(field: str) -> None:
 
     with pytest.raises(ValidationError):
         Category.model_validate(fields)
+
+
+def test_a_summary_accepts_the_minimum_fields() -> None:
+    summary = ProductSummary.model_validate(SUMMARY_FIELDS)
+
+    assert summary.product_id == "MN-MON-0001"
+    assert summary.current_price is None
+    assert summary.not_recommended_for is None
+
+
+@pytest.mark.parametrize("field", ["product_id", "name", "brand", "category", "in_stock"])
+def test_a_summary_without_a_required_field_is_rejected(field: str) -> None:
+    fields = {key: value for key, value in SUMMARY_FIELDS.items() if key != field}
+
+    with pytest.raises(ValidationError):
+        ProductSummary.model_validate(fields)
+
+
+def test_a_summary_reports_the_stock_as_a_boolean() -> None:
+    # Garantía del RF-07: con el número, el modelo lo repetía turnos después
+    # como si lo hubiera vuelto a consultar.
+    summary = ProductSummary.model_validate({**SUMMARY_FIELDS, "in_stock": 0})
+
+    assert summary.in_stock is False
+
+
+@pytest.mark.parametrize(
+    "field", ["available_qty", "sku", "image_url", "tags", "subcategory", "short_description"]
+)
+def test_a_summary_does_not_accept_what_the_model_does_not_need(field: str) -> None:
+    # Si una columna se cuela en la consulta, el modelo la rechaza en vez de
+    # mandársela al LLM sin que nadie lo note.
+    with pytest.raises(ValidationError):
+        ProductSummary.model_validate({**SUMMARY_FIELDS, field: "x"})
+
+
+def test_a_summary_carries_what_the_product_is_not_recommended_for() -> None:
+    summary = ProductSummary.model_validate({**SUMMARY_FIELDS, "not_recommended_for": "gaming"})
+
+    assert summary.not_recommended_for == "gaming"
+
+
+def test_a_summary_page_reports_the_total_without_trimming() -> None:
+    page = ProductSummaryPage.model_validate({"items": [SUMMARY_FIELDS], "total": 12})
+
+    assert page.total == 12
+    assert page.items[0].product_id == "MN-MON-0001"
 
 
 def test_a_page_reports_that_there_are_more_results() -> None:

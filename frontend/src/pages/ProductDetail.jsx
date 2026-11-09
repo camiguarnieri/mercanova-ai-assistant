@@ -112,18 +112,16 @@ function ProductSheet({ product }) {
         <Fact label="Identificador" value={product.product_id} />
         <Fact label="SKU" value={product.sku} />
         <Fact label="Color" value={product.color} />
-        <Fact label="Peso" value={product.weight_kg ? `${product.weight_kg} kg` : null} />
-        <Fact
-          label="Garantía"
-          value={product.warranty_months ? `${product.warranty_months} meses` : null}
-        />
-        <Fact
-          label="Devolución"
-          value={product.return_days ? `${product.return_days} días` : null}
-        />
+        <Fact label="Peso" value={withUnit(product.weight_kg, 'kg')} />
+        <Fact label="Garantía" value={withUnit(product.warranty_months, 'meses')} />
+        <Fact label="Devolución" value={withUnit(product.return_days, 'días')} />
         <Fact
           label="Puntaje"
-          value={product.rating ? `${product.rating} de 5 (${product.review_count} reseñas)` : null}
+          value={
+            present(product.rating)
+              ? `${product.rating} de 5 (${product.review_count ?? 0} reseñas)`
+              : null
+          }
         />
         <Fact label="Lanzamiento" value={product.launch_date} />
         <Fact
@@ -137,6 +135,18 @@ function ProductSheet({ product }) {
       <SpecificationGroups specifications={product.specifications} />
     </article>
   )
+}
+
+// Dice si el catálogo trae el dato. El 0 es un valor, no una ausencia: con un
+// `valor ? ... : null` un puntaje de 0 o una garantía de 0 meses se mostrarían
+// como "Sin dato", que es afirmar algo distinto de lo que dice el catálogo.
+function present(value) {
+  return value !== null && value !== undefined && value !== ''
+}
+
+// Pega la unidad al valor, si el catálogo lo trae.
+function withUnit(value, unit) {
+  return present(value) ? `${value} ${unit}` : null
 }
 
 // Muestra un dato suelto, o avisa que el catálogo no lo tiene.

@@ -10,7 +10,17 @@ from __future__ import annotations
 import sqlite3
 
 from backend import catalog_sql
-from backend.models import Brand, Category, Product, ProductDetail, ProductPage, Specification
+from backend.models import (
+    Brand,
+    Category,
+    Product,
+    ProductDetail,
+    ProductPage,
+    ProductSummary,
+    ProductSummaryPage,
+    RelatedProduct,
+    Specification,
+)
 
 DEFAULT_LIMIT = 20
 MAX_LIMIT = 100
@@ -129,6 +139,72 @@ def list_products(
     )
 
 
+# Busca productos y devuelve solo lo que necesita leer el asistente.
+def list_products_for_assistant(
+    connection: sqlite3.Connection,
+    *,
+    category: str | None = None,
+    brand: str | None = None,
+    recommended_for: str | None = None,
+    min_price: float | None = None,
+    max_price: float | None = None,
+    search: str | None = None,
+    limit: int = DEFAULT_LIMIT,
+) -> ProductSummaryPage:
+    """Busca productos para el asistente, con el resumen recortado.
+
+    Es la misma búsqueda que `list_products()` pero trae menos columnas: solo
+    las que el modelo necesita para elegir y explicar. No pagina, porque el
+    asistente trabaja con los primeros resultados y vuelve a buscar con otros
+    filtros si no le sirven.
+
+    Los productos dados de baja quedan siempre afuera: el asistente no puede
+    recomendar algo que no se vende más.
+
+    Args:
+        connection: Conexión abierta con `db.connect()`.
+        category: Nombre de la categoría por la que filtrar.
+        brand: Nombre o identificador de la marca.
+        recommended_for: Uso para el que el catálogo recomienda el producto.
+        min_price: Precio vigente mínimo, inclusive.
+        max_price: Precio vigente máximo, inclusive.
+        search: Texto libre a buscar en el nombre, las descripciones,
+            `recommended_for` y `tags`.
+        limit: Cantidad máxima de productos a devolver, de 1 a `MAX_LIMIT`.
+
+    Returns:
+        Los productos encontrados y el total sin recortar.
+
+    Raises:
+        InvalidFilterError: Si los filtros o el límite no son válidos.
+    """
+    check_query(limit, 0, min_price, max_price)
+    where, parameters = catalog_sql.build_filters(
+        category=category,
+        brand=brand,
+        recommended_for=recommended_for,
+        min_price=min_price,
+        max_price=max_price,
+        search=search,
+        only_active=True,
+    )
+
+    total = int(
+        connection.execute(
+            f"SELECT COUNT(*) AS total {catalog_sql.PRODUCT_SOURCE} {where}", parameters
+        ).fetchone()["total"]
+    )
+    rows = connection.execute(
+        f"SELECT {catalog_sql.ASSISTANT_COLUMNS} {catalog_sql.PRODUCT_SOURCE} {where} "
+        f"{catalog_sql.PRODUCT_ORDER} LIMIT ?",
+        [*parameters, limit],
+    ).fetchall()
+
+    return ProductSummaryPage(
+        items=[ProductSummary.model_validate(dict(row)) for row in rows], total=total
+    )
+
+
 # Trae la ficha completa de un producto, con precio, stock y especificaciones.
 def get_product(connection: sqlite3.Connection, product_id: str) -> ProductDetail:
     """Busca un producto por su identificador.
@@ -167,6 +243,62 @@ def get_product(connection: sqlite3.Connection, product_id: str) -> ProductDetai
     return ProductDetail.model_validate(detail)
 
 
+# Lista los productos que el catálogo relaciona con uno dado.
+def list_related_products(
+    connection: sqlite3.Connection, product_id: str, relation_type: str | None = None
+) -> list[RelatedProduct]:
+    """Busca los productos relacionados con uno dado.
+
+    Args:
+        connection: Conexión abierta con `db.connect()`.
+        product_id: Identificador del producto del que se parte.
+        relation_type: Tipo de relación por el que filtrar. Si es `None`, trae
+            los tres tipos juntos.
+
+    Returns:
+        Los relacionados, del más fuerte al más débil. Una lista vacía
+        significa que el producto existe pero no tiene relaciones cargadas.
+
+    Raises:
+        ProductNotFoundError: Si el producto del que se parte no existe.
+        InvalidFilterError: Si el tipo de relación no es uno de los del dataset.
+    """
+    identifier = product_id.strip()
+    if relation_type is not None and relation_type not in catalog_sql.RELATION_TYPES:
+        raise InvalidFilterError(
+            f"El tipo de relación '{relation_type}' no existe. "
+            f"Los válidos son: {', '.join(catalog_sql.RELATION_TYPES)}."
+        )
+    if connection.execute(catalog_sql.PRODUCT_EXISTS_QUERY, [identifier]).fetchone() is None:
+        raise ProductNotFoundError(
+            f"No existe el producto '{product_id}' en el catálogo. "
+            f"Buscá el identificador correcto con el listado de productos."
+        )
+
+    where = "WHERE r.product_id = ?"
+    parameters: list[object] = [identifier]
+    if relation_type is not None:
+        where += " AND r.relation_type = ?"
+        parameters.append(relation_type)
+
+    rows = connection.execute(
+        f"SELECT r.relation_type, r.strength, {catalog_sql.SUMMARY_COLUMNS} "
+        f"{catalog_sql.RELATED_SOURCE} {where} {catalog_sql.RELATED_ORDER}",
+        parameters,
+    ).fetchall()
+
+    related: list[RelatedProduct] = []
+    for row in rows:
+        fields = dict(row)
+        relation = {
+            "relation_type": fields.pop("relation_type"),
+            "strength": fields.pop("strength"),
+            "product": Product.model_validate(fields),
+        }
+        related.append(RelatedProduct.model_validate(relation))
+    return related
+
+
 # Lista los pares categoría/subcategoría del catálogo.
 def list_categories(connection: sqlite3.Connection) -> list[Category]:
     """Devuelve todas las categorías con sus subcategorías.
@@ -179,6 +311,72 @@ def list_categories(connection: sqlite3.Connection) -> list[Category]:
     """
     rows = connection.execute(catalog_sql.CATEGORIES_QUERY).fetchall()
     return [Category.model_validate(dict(row)) for row in rows]
+
+
+# Lista los nombres de categoría que existen, para que el modelo no los invente.
+def list_category_names(connection: sqlite3.Connection) -> list[str]:
+    """Devuelve las categorías con las que se puede filtrar.
+
+    Args:
+        connection: Conexión abierta con `db.connect()`.
+
+    Returns:
+        Los nombres de categoría de los productos activos, ordenados y sin
+        repetir, tal como están escritos en el catálogo.
+    """
+    rows = connection.execute(catalog_sql.CATEGORY_NAMES_QUERY).fetchall()
+    return [str(row["category"]).strip() for row in rows]
+
+
+# Agrupa los casos de uso por categoría: no son los mismos en todas.
+def list_use_cases_by_category(connection: sqlite3.Connection) -> dict[str, list[str]]:
+    """Devuelve los casos de uso que existen en cada categoría.
+
+    Los casos de uso no son globales: 'video calls' existe en Webcams y no en
+    Headphones, donde el valor es 'calls'. Agrupados, el modelo puede elegir
+    uno que exista en la categoría que está buscando, en vez de combinar dos
+    valores válidos que juntos no traen nada.
+
+    Args:
+        connection: Conexión abierta con `db.connect()`.
+
+    Returns:
+        Un diccionario `{categoría: casos de uso}`, con las categorías y los
+        casos de uso ordenados y sin repetir.
+    """
+    rows = connection.execute(catalog_sql.USE_CASES_QUERY).fetchall()
+    grouped: dict[str, set[str]] = {}
+    for row in rows:
+        category = str(row["category"]).strip()
+        for use_case in str(row["recommended_for"]).split(";"):
+            if use_case.strip():
+                grouped.setdefault(category, set()).add(use_case.strip())
+    return {category: sorted(grouped[category]) for category in sorted(grouped)}
+
+
+# Lista los casos de uso que existen, en todo el catálogo o en una categoría.
+def list_use_cases(
+    connection: sqlite3.Connection, category: str | None = None
+) -> list[str]:
+    """Devuelve los valores con los que se puede filtrar por caso de uso.
+
+    Args:
+        connection: Conexión abierta con `db.connect()`.
+        category: Si se pasa, solo los casos de uso de esa categoría, sin
+            distinguir mayúsculas. Si es `None`, los de todo el catálogo.
+
+    Returns:
+        Los casos de uso de los productos activos, ordenados y sin repetir.
+        Una lista vacía si la categoría no existe o no tiene ninguno cargado.
+    """
+    grouped = list_use_cases_by_category(connection)
+    if category is not None:
+        wanted = category.strip().casefold()
+        for name, use_cases in grouped.items():
+            if name.casefold() == wanted:
+                return use_cases
+        return []
+    return sorted({use_case for use_cases in grouped.values() for use_case in use_cases})
 
 
 # Lista las marcas del catálogo.

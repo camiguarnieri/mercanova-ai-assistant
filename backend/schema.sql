@@ -13,7 +13,12 @@ CREATE TABLE IF NOT EXISTS brands (
 
 -- Categorías (hoja Categories, 37 filas).
 -- La clave primaria es subcategory_id: category_id se repite, porque cada fila
--- es un par categoría/subcategoría (12 categorías, 37 subcategorías).
+-- es un par categoría/subcategoría. Hay 12 categorías y 37 pares, con 37
+-- subcategory_id, pero solo 32 nombres de subcategoría distintos: 'Gaming'
+-- aparece en 3 categorías, y 'Professional', 'Ergonomic' y 'Standard' en 2 cada
+-- una. Por eso products referencia el par (category_name, subcategory_name) con
+-- una clave foránea compuesta: el nombre de la subcategoría solo no identifica
+-- una fila.
 CREATE TABLE IF NOT EXISTS categories (
     subcategory_id   TEXT PRIMARY KEY,
     category_id      TEXT NOT NULL,

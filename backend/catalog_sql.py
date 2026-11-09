@@ -16,6 +16,19 @@ SUMMARY_COLUMNS = """
     COALESCE(stock.available_qty, 0) AS available_qty
 """
 
+# Columnas del resumen que lee el asistente, con los campos de ProductSummary.
+# Son menos que las del catálogo a propósito: lo que no está acá no entra en la
+# ventana de contexto del modelo ni en el tiempo que tarda en leerlo.
+# El stock viaja como booleano y no como número: así una cantidad solo puede
+# salir de check_availability, que la consulta en el momento. Con el número acá,
+# el modelo lo repetía turnos después como si lo hubiera vuelto a consultar.
+ASSISTANT_COLUMNS = """
+    p.product_id, p.name, p.brand, p.category,
+    p.recommended_for, p.not_recommended_for,
+    pr.currency, pr.current_price,
+    COALESCE(stock.available_qty, 0) > 0 AS in_stock
+"""
+
 # Columnas que agrega la ficha completa, con los campos de ProductDetail.
 DETAIL_COLUMNS = """,
     p.description, p.not_recommended_for, p.key_features, p.tags,
@@ -27,8 +40,7 @@ DETAIL_COLUMNS = """,
 # El stock vive por depósito: para el catálogo se suma el de los 5 depósitos.
 # Los LEFT JOIN evitan que un producto desaparezca del catálogo por no tener
 # precio o inventario cargado; en ese caso el precio viaja en null.
-PRODUCT_SOURCE = """
-FROM products AS p
+PRICE_AND_STOCK_JOINS = """
 LEFT JOIN pricing AS pr ON pr.product_id = p.product_id
 LEFT JOIN (
     SELECT product_id, SUM(available_qty) AS available_qty
@@ -37,8 +49,24 @@ LEFT JOIN (
 ) AS stock ON stock.product_id = p.product_id
 """
 
+PRODUCT_SOURCE = "\nFROM products AS p" + PRICE_AND_STOCK_JOINS
+
+# Para los relacionados se arranca de relations y se trae el otro producto.
+RELATED_SOURCE = (
+    "\nFROM relations AS r"
+    "\nJOIN products AS p ON p.product_id = r.related_product_id" + PRICE_AND_STOCK_JOINS
+)
+
 # El orden por nombre e id hace que el paginado sea estable entre llamadas.
 PRODUCT_ORDER = "ORDER BY p.name, p.product_id"
+
+# Los relacionados se ordenan por fuerza de la relación, de mayor a menor.
+RELATED_ORDER = "ORDER BY r.strength DESC, p.name"
+
+# Tipos de relación que trae el dataset.
+RELATION_TYPES = ("alternative_to", "accessory_for", "often_bought_with")
+
+PRODUCT_EXISTS_QUERY = "SELECT 1 FROM products WHERE product_id = ?"
 
 SPECIFICATIONS_QUERY = """
 SELECT attribute_group, attribute_name, value_text, value_number, unit
@@ -51,6 +79,27 @@ CATEGORIES_QUERY = """
 SELECT category_id, category_name, subcategory_id, subcategory_name, department
 FROM categories
 ORDER BY category_name, subcategory_name
+"""
+
+# El vocabulario que recibe el modelo sale de estas dos consultas, no de una
+# lista escrita a mano: si el catálogo cambia, el esquema cambia con él. Solo
+# los productos activos, porque son los únicos que el asistente puede recomendar.
+CATEGORY_NAMES_QUERY = """
+SELECT DISTINCT category
+FROM products
+WHERE active = 1 AND category IS NOT NULL AND TRIM(category) <> ''
+ORDER BY category
+"""
+
+# Los casos de uso van con su categoría porque no son globales: 'video calls'
+# existe en Webcams y no en Headphones, y el modelo tiene que ver esa diferencia
+# antes de combinar los dos filtros. recommended_for trae varios usos en una
+# sola columna, separados por punto y coma, y quien llama los separa.
+USE_CASES_QUERY = """
+SELECT DISTINCT category, recommended_for
+FROM products
+WHERE active = 1 AND recommended_for IS NOT NULL AND TRIM(recommended_for) <> ''
+ORDER BY category
 """
 
 BRANDS_QUERY = """

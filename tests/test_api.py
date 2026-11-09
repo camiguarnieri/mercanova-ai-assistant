@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import sqlite3
 import threading
 from collections.abc import Iterator
@@ -14,6 +15,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from backend import api, db
+from backend.vocabulary import Vocabulary
 
 
 @pytest.fixture
@@ -344,6 +346,94 @@ def test_the_brands_endpoint_lists_the_brands(client: TestClient) -> None:
     assert response.status_code == 200
     body = response.json()
     assert [brand["brand_name"] for brand in body] == ["Flux", "NovaTech"]
+
+
+def test_the_startup_preloads_the_model(
+    with_model_preload: None, monkeypatch: pytest.MonkeyPatch, catalog_database: Path
+) -> None:
+    preloaded: list[bool] = []
+    monkeypatch.setattr(api.llm, "preload_model", lambda: preloaded.append(True))
+    api.app.dependency_overrides[api.get_connection_scope] = lambda: partial(
+        db.connection_scope, catalog_database
+    )
+    try:
+        with TestClient(api.app):
+            pass
+    finally:
+        api.app.dependency_overrides.clear()
+
+    # Así el primer mensaje del usuario no paga la carga del modelo.
+    assert preloaded == [True]
+
+
+def test_the_catalog_works_with_ollama_off(
+    with_model_preload: None, monkeypatch: pytest.MonkeyPatch, catalog_database: Path
+) -> None:
+    def offline() -> None:
+        raise api.llm.LLMConfigurationError("No se pudo hablar con Ollama. Corré: ollama serve")
+
+    monkeypatch.setattr(api.llm, "preload_model", offline)
+    api.app.dependency_overrides[api.get_connection_scope] = lambda: partial(
+        db.connection_scope, catalog_database
+    )
+    try:
+        with TestClient(api.app) as test_client:
+            # Ollama apagado es una advertencia, no un error fatal: la API
+            # arranca y el catálogo sigue andando.
+            response = test_client.get("/products")
+    finally:
+        api.app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+
+
+def test_the_startup_builds_the_vocabulary_of_the_catalog(
+    with_vocabulary_preload: None, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    terms = Vocabulary()
+    monkeypatch.setattr(api.vocabulary, "VOCABULARY", terms)
+
+    with TestClient(api.app):
+        pass
+
+    # Se consulta con una base vacía: si el esquema no hubiera quedado armado en
+    # el arranque, lo iría a buscar acá y fallaría.
+    empty = db.connect(tmp_path / "vacia.db")
+    try:
+        properties = terms.schemas(empty)[0]["function"]["parameters"]["properties"]
+    finally:
+        empty.close()
+
+    assert properties["category"]["enum"] == ["Headphones", "Monitors"]
+
+
+def test_the_api_starts_even_if_the_database_is_not_loaded_yet(
+    with_vocabulary_preload: None, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    # Si la base no está cargada al arrancar, es una advertencia: la API levanta
+    # y el vocabulario se reintenta en el primer mensaje.
+    monkeypatch.setattr(api.vocabulary, "VOCABULARY", Vocabulary())
+    monkeypatch.setenv("DATABASE_PATH", str(tmp_path / "vacia.db"))
+
+    with TestClient(api.app) as test_client:
+        response = test_client.get("/brands")
+
+    assert response.status_code == 503
+    assert "load_dataset.py" in response.json()["detail"]
+
+
+def test_the_failure_of_the_preload_is_logged_as_a_warning(
+    with_model_preload: None, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    def offline() -> None:
+        raise api.llm.LLMConfigurationError("Corré: ollama serve")
+
+    monkeypatch.setattr(api.llm, "preload_model", offline)
+
+    with caplog.at_level(logging.WARNING):
+        api.preload_assistant()
+
+    assert "ollama serve" in caplog.text
 
 
 def test_the_api_answers_503_when_the_database_is_not_loaded(tmp_path: Path) -> None:
