@@ -8,6 +8,16 @@
 /** Texto que muestra un dato que el catálogo no tiene cargado. */
 export const MISSING = 'Sin dato'
 
+/**
+ * Lo que dice un campo de usos vacío.
+ *
+ * Lo escribe el backend, en MISSING_USES de backend/catalog_text.py: el
+ * asistente recibe esa misma frase en el resultado de la herramienta, y acá se
+ * reconoce para mostrarla con el estilo del campo vacío en vez de como un uso
+ * más. Si cambia allá, cambia acá.
+ */
+export const MISSING_USES = 'el catálogo no lo aclara'
+
 // Formatea un precio con su moneda, o avisa que no está cargado.
 export function formatPrice(price, currency) {
   if (price === null || price === undefined) {

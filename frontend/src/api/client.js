@@ -48,6 +48,30 @@ async function request(path, params = {}) {
   return response.json()
 }
 
+// Manda un cuerpo JSON y traduce los errores igual que los pedidos de lectura.
+async function post(path, body) {
+  let response
+  try {
+    response = await fetch(`${API_URL}${path}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    })
+  } catch (cause) {
+    throw new ApiError(
+      `No se pudo conectar con la API en ${API_URL}. Verificá que esté corriendo: ` +
+        'uvicorn backend.api:app --reload',
+      0,
+    )
+  }
+
+  if (!response.ok) {
+    const detail = await readDetail(response)
+    throw new ApiError(detail, response.status)
+  }
+  return response.json()
+}
+
 // Lee el campo detail que manda la API, o arma un mensaje según el estado.
 async function readDetail(response) {
   try {
@@ -104,4 +128,18 @@ export function fetchCategories() {
  */
 export function fetchBrands() {
   return request('/brands')
+}
+
+/**
+ * Manda un mensaje al asistente y trae su respuesta.
+ *
+ * El historial lo guarda el servidor: acá solo viaja el mensaje nuevo y la
+ * sesión a la que pertenece.
+ *
+ * @param {string} sessionId Identificador de la conversación.
+ * @param {string} message Lo que escribió el usuario.
+ * @returns {Promise<object>} La respuesta con session_id, reply y tools_used.
+ */
+export function sendChatMessage(sessionId, message) {
+  return post('/chat', { session_id: sessionId, message })
 }
