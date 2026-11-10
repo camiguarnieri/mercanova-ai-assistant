@@ -21,12 +21,13 @@ export function Loading({ title = 'Cargando...', children }) {
   )
 }
 
-// Muestra el error de la API con el mensaje que explica qué hacer.
-export function ErrorNotice({ message, onRetry }) {
+// Muestra el error de la API con el mensaje que explica qué hacer. El título
+// se puede cambiar: no todos los errores son de la carga del catálogo.
+export function ErrorNotice({ message, onRetry, title = 'No se pudo cargar el catálogo' }) {
   return (
     <Panel
       variant="error"
-      title="No se pudo cargar el catálogo"
+      title={title}
       action={
         onRetry ? (
           <button type="button" className="button-secondary" onClick={onRetry}>

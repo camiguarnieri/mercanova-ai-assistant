@@ -6,6 +6,7 @@ import { fetchProduct } from '../api/client.js'
 import { ErrorNotice, Loading } from '../components/Notice.jsx'
 import SpecificationGroups from '../components/SpecificationGroups.jsx'
 import { MISSING, formatPrice, formatStock, splitList } from '../format.js'
+import AddToCartButton from '../components/AddToCartButton.jsx'
 
 export default function ProductDetail({ productId, onBack }) {
   const [product, setProduct] = useState(null)
@@ -97,6 +98,13 @@ function ProductSheet({ product }) {
               Dado de baja del catálogo
             </span>
           ) : null}
+          {/* Un producto dado de baja tampoco se puede comprar: el backend lo
+              rechaza, así que el botón no lo ofrece. */}
+          <AddToCartButton
+            productId={product.product_id}
+            inStock={!withoutStock && product.active}
+            className="detail-add"
+          />
         </div>
       </header>
 
