@@ -16,6 +16,7 @@ import pytest
 from fake_ollama import (
     FakeClient,
     FakeResponse,
+    client_after_searching,
     client_that_answers,
     client_that_compares,
     client_with_one_tool_call,
@@ -24,6 +25,7 @@ from fastapi.testclient import TestClient
 from ollama import ResponseError
 
 from backend import api, db, dependencies, llm
+from backend.carts import CartStore
 from backend.sessions import SessionStore
 from backend.vocabulary import Vocabulary
 
@@ -41,14 +43,21 @@ def terms() -> Vocabulary:
 
 
 @pytest.fixture
+def cart_store() -> CartStore:
+    """Un almacén de carritos vacío, propio de cada test."""
+    return CartStore()
+
+
+@pytest.fixture
 def client(
-    catalog_database: Path, store: SessionStore, terms: Vocabulary
+    catalog_database: Path, store: SessionStore, cart_store: CartStore, terms: Vocabulary
 ) -> Iterator[TestClient]:
     """Un cliente de test con la base de prueba y una sesión limpia."""
     api.app.dependency_overrides[api.get_connection_scope] = lambda: partial(
         db.connection_scope, catalog_database
     )
     api.app.dependency_overrides[dependencies.get_session_store] = lambda: store
+    api.app.dependency_overrides[dependencies.get_cart_store] = lambda: cart_store
     api.app.dependency_overrides[dependencies.get_vocabulary] = lambda: terms
     with TestClient(api.app) as test_client:
         yield test_client
@@ -430,3 +439,52 @@ def test_the_preflight_of_the_chat_is_answered(client: TestClient) -> None:
 
     assert response.status_code == 200
     assert "POST" in response.headers["access-control-allow-methods"]
+
+
+def test_the_assistant_adds_to_the_cart_the_user_sees(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    use_model(
+        monkeypatch,
+        client_after_searching(
+            "add_to_cart", {"product_id": "MN-MON-0001", "quantity": 2}, reply="Lo agregué."
+        ),
+    )
+
+    response = client.post("/chat", json={"session_id": "s-1", "message": "llevame dos"})
+
+    assert response.status_code == 200
+    assert [tool["name"] for tool in response.json()["tools_used"]][-1] == "add_to_cart"
+    # El carrito que escribió el asistente es el que devuelve GET /cart: es el
+    # mismo almacén, así la pantalla y la conversación no pueden discrepar.
+    cart = client.get("/cart", params={"session_id": "s-1"}).json()
+    assert cart["item_count"] == 2
+    assert cart["items"][0]["product_id"] == "MN-MON-0001"
+
+
+def test_the_assistant_writes_only_the_cart_of_its_own_session(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    use_model(
+        monkeypatch,
+        client_after_searching("add_to_cart", {"product_id": "MN-MON-0001"}, reply="Listo."),
+    )
+
+    client.post("/chat", json={"session_id": "s-1", "message": "llevame uno"})
+
+    assert client.get("/cart", params={"session_id": "s-2"}).json()["items"] == []
+
+
+def test_the_assistant_cannot_confirm_a_purchase(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    use_model(
+        monkeypatch,
+        client_with_one_tool_call("checkout", {"session_id": "s-1"}, reply="No puedo."),
+    )
+
+    client.post("/chat", json={"session_id": "s-1", "message": "comprá todo"})
+
+    # No existe una herramienta para cerrar la compra: la orden la crea el
+    # usuario desde POST /checkout, con su confirmación explícita.
+    assert client.get("/orders", params={"session_id": "s-1"}).json() == []

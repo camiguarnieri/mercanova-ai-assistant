@@ -61,6 +61,27 @@ export function formatSpecification(specification) {
   return MISSING
 }
 
+/**
+ * Formatea el momento en que se confirmó una orden.
+ *
+ * El backend lo manda en UTC y en ISO 8601; acá se muestra en la zona del
+ * navegador, que es la del usuario. Si el valor no se puede leer se muestra
+ * tal como vino: es mejor que inventar una fecha.
+ *
+ * @param {string} timestamp El `created_at` de la orden.
+ * @returns {string} La fecha y la hora listas para mostrar.
+ */
+export function formatDateTime(timestamp) {
+  if (!timestamp) {
+    return MISSING
+  }
+  const moment = new Date(timestamp)
+  if (Number.isNaN(moment.getTime())) {
+    return timestamp
+  }
+  return moment.toLocaleString('es-UY', { dateStyle: 'medium', timeStyle: 'short' })
+}
+
 // Convierte una lista separada por punto y coma en elementos sueltos.
 export function splitList(text) {
   if (!text) {

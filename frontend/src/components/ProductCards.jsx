@@ -8,6 +8,7 @@
  */
 
 import { MISSING_USES, formatPrice, splitList } from '../format.js'
+import AddToCartButton from './AddToCartButton.jsx'
 
 export default function ProductCards({ products }) {
   if (!products || products.length === 0) {
@@ -34,6 +35,9 @@ export default function ProductCards({ products }) {
           </span>
           <Uses label="Recomendado para" text={product.recommended_for} />
           <Uses label="No recomendado para" text={product.not_recommended_for} />
+          {/* El usuario puede agregar lo que le mostró el asistente sin
+              escribirle: el stock viene del mismo resultado de la búsqueda. */}
+          <AddToCartButton productId={product.product_id} inStock={product.in_stock} />
         </article>
       ))}
     </section>

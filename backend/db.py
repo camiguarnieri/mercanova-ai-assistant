@@ -44,7 +44,10 @@ SCHEMA_FILE = Path(__file__).resolve().parent / "schema.sql"
 
 MEMORY_PATH = ":memory:"
 
-# Orden de inserción: primero las tablas referenciadas, después las que dependen.
+# Las tablas que vienen del Excel de la cátedra, en orden de inserción: primero
+# las referenciadas, después las que dependen. `orders` y `order_items` no están
+# acá a propósito: son datos operativos que genera la aplicación, y la carga del
+# dataset vacía y vuelve a escribir todo lo que esta tupla nombra.
 TABLES: tuple[str, ...] = (
     "brands",
     "categories",

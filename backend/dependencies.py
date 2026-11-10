@@ -10,12 +10,13 @@ import sqlite3
 from collections.abc import Callable
 from contextlib import AbstractContextManager
 
-from backend import db, sessions, vocabulary
+from backend import carts, db, sessions, vocabulary
 
 __all__ = [
     "ConnectionScope",
     "get_connection_scope",
     "get_session_store",
+    "get_cart_store",
     "get_vocabulary",
 ]
 
@@ -47,6 +48,19 @@ def get_session_store() -> sessions.SessionStore:
         `dependency_overrides` para no arrastrar sesiones entre tests.
     """
     return sessions.STORE
+
+
+def get_cart_store() -> carts.CartStore:
+    """Entrega el almacén de carritos que usan el chat y los endpoints del carrito.
+
+    Es el mismo para los dos, así el producto que agrega el asistente es el que
+    ve el usuario en pantalla.
+
+    Returns:
+        La instancia única del proceso. Los tests la reemplazan con
+        `dependency_overrides` para no arrastrar carritos entre tests.
+    """
+    return carts.STORE
 
 
 def get_vocabulary() -> vocabulary.Vocabulary:

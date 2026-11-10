@@ -135,9 +135,43 @@ CREATE TABLE IF NOT EXISTS relations (
     FOREIGN KEY (related_product_id) REFERENCES products (product_id)
 );
 
+-- Órdenes confirmadas (RF-14). **Dato operativo del equipo**: no sale del Excel
+-- de la cátedra, lo genera la aplicación cuando el usuario confirma la compra.
+-- Se guarda en la base y no en memoria porque la confirmación también descuenta
+-- stock de inventory: las dos cosas pasan en la misma transacción, así no queda
+-- stock descontado sin orden ni orden sin stock descontado.
+CREATE TABLE IF NOT EXISTS orders (
+    order_id         TEXT PRIMARY KEY,
+    session_id       TEXT NOT NULL,
+    created_at       TEXT NOT NULL,
+    customer_name    TEXT NOT NULL,
+    shipping_address TEXT NOT NULL,
+    currency         TEXT NOT NULL,
+    total_amount     REAL NOT NULL CHECK (total_amount >= 0)
+);
+
+-- Líneas de una orden (RF-14). Guardan el nombre y el precio **al momento de la
+-- compra**: si después cambia el catálogo, la orden sigue diciendo lo que el
+-- usuario confirmó. Por eso name y unit_price se copian y no se leen con un join.
+CREATE TABLE IF NOT EXISTS order_items (
+    order_id   TEXT NOT NULL,
+    product_id TEXT NOT NULL,
+    name       TEXT NOT NULL,
+    quantity   INTEGER NOT NULL CHECK (quantity > 0),
+    unit_price REAL NOT NULL CHECK (unit_price >= 0),
+    currency   TEXT NOT NULL,
+    line_total REAL NOT NULL CHECK (line_total >= 0),
+    PRIMARY KEY (order_id, product_id),
+    FOREIGN KEY (order_id) REFERENCES orders (order_id),
+    FOREIGN KEY (product_id) REFERENCES products (product_id)
+);
+
 -- Índices para las búsquedas que hacen las tools del asistente.
 CREATE INDEX IF NOT EXISTS idx_products_category ON products (category, subcategory);
 CREATE INDEX IF NOT EXISTS idx_products_brand ON products (brand_id);
 CREATE INDEX IF NOT EXISTS idx_specifications_product ON specifications (product_id);
 CREATE INDEX IF NOT EXISTS idx_inventory_product ON inventory (product_id);
 CREATE INDEX IF NOT EXISTS idx_relations_product ON relations (product_id, relation_type);
+
+-- El historial de órdenes se consulta por sesión, de la más nueva a la más vieja.
+CREATE INDEX IF NOT EXISTS idx_orders_session ON orders (session_id, created_at DESC);

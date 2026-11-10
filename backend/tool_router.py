@@ -10,15 +10,19 @@ import sqlite3
 from collections.abc import Iterable
 from typing import Any
 
-from backend import catalog, provenance, tool_arguments, tool_schemas, tools
+from backend import cart, cart_tools, catalog, provenance, tool_arguments, tool_schemas, tools
+from backend.carts import CartSession
 
-# Qué función implementa cada herramienta del esquema.
+# Qué función implementa cada herramienta del esquema. Las dos del carrito
+# reciben además el carrito de la sesión, que no es un argumento del modelo.
 IMPLEMENTATIONS = {
     tool_schemas.SEARCH_PRODUCTS: tools.search_products,
     tool_schemas.GET_PRODUCT_DETAILS: tools.get_product_details,
     tool_schemas.CHECK_AVAILABILITY: tools.check_availability,
     tool_schemas.COMPARE_PRODUCTS: tools.compare_products,
     tool_schemas.GET_RELATED_PRODUCTS: tools.get_related_products,
+    tool_schemas.ADD_TO_CART: cart_tools.add_to_cart,
+    tool_schemas.REMOVE_FROM_CART: cart_tools.remove_from_cart,
 }
 
 # Los parámetros declarados de cada herramienta, para validar contra el mismo
@@ -104,6 +108,7 @@ def run_tool(
     name: str,
     arguments: dict[str, Any],
     known_products: Iterable[str] | None = None,
+    cart_session: CartSession | None = None,
 ) -> dict[str, Any]:
     """Corre una herramienta por nombre.
 
@@ -119,6 +124,10 @@ def run_tool(
             ellos no se ejecuta: el modelo lo inventó. Si es `None` no se
             revisa la procedencia, que es lo que hace falta para probar una
             herramienta sola.
+        cart_session: El carrito de esta conversación. Las herramientas que lo
+            escriben lo reciben como primer argumento, y el modelo no puede
+            elegirlo: lo pone el servidor. Si es `None`, esas herramientas no
+            se ejecutan y devuelven un error en vez de tocar otro carrito.
 
     Returns:
         El resultado de la herramienta, o un diccionario con `error` explicando
@@ -128,8 +137,15 @@ def run_tool(
         cleaned = validate_arguments(name, arguments)
         if known_products is not None:
             provenance.check_ids(cleaned, known_products)
+        if name in tool_schemas.CART_TOOL_NAMES:
+            if cart_session is None:
+                raise tools.ToolError(
+                    f"No uses '{name}' acá: esta consulta no tiene un carrito asociado. "
+                    f"Contestá con las herramientas que leen el catálogo."
+                )
+            return IMPLEMENTATIONS[name](connection, cart_session, **cleaned)
         return IMPLEMENTATIONS[name](connection, **cleaned)
-    except (tools.ToolError, catalog.CatalogError) as error:
+    except (tools.ToolError, catalog.CatalogError, cart.CartError) as error:
         return {"found": False, "error": str(error)}
     except TypeError as error:
         return {

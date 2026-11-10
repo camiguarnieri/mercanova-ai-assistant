@@ -3,13 +3,17 @@
 import { useEffect, useRef, useState } from 'react'
 
 import { sendChatMessage } from '../api/client.js'
+import { useCart } from '../CartContext.jsx'
+import CartPanel from '../components/CartPanel.jsx'
 import ChatMessage, { ASSISTANT, ERROR, USER } from '../components/ChatMessage.jsx'
 import { Empty } from '../components/Notice.jsx'
-import { getSessionId } from '../session.js'
 
-export default function Chat() {
-  // El identificador se crea una sola vez y queda guardado en el navegador.
-  const [sessionId] = useState(getSessionId)
+/** Las herramientas con las que el asistente escribe el carrito. */
+const CART_TOOLS = ['add_to_cart', 'remove_from_cart']
+
+export default function Chat({ onGoToCart }) {
+  // La sesión es la del carrito: la misma que usa el chat para su historial.
+  const { sessionId, refresh } = useCart()
   const [messages, setMessages] = useState([])
   const [draft, setDraft] = useState('')
   const [sending, setSending] = useState(false)
@@ -49,6 +53,12 @@ export default function Chat() {
         comparisons: answer.comparisons,
         toolsUsed: answer.tools_used,
       })
+      // El carrito no viaja en la respuesta del chat: lo arma un solo
+      // endpoint. Si el asistente lo tocó, se lo vuelve a pedir, así el panel
+      // muestra lo que quedó guardado y no lo que dijo el modelo.
+      if ((answer.tools_used || []).some((tool) => CART_TOOLS.includes(tool.name))) {
+        refresh()
+      }
     } catch (cause) {
       // El mensaje de la API ya explica qué hacer: se muestra tal cual.
       append({ role: ERROR, text: cause.message })
@@ -58,40 +68,57 @@ export default function Chat() {
   }
 
   return (
-    <section className="chat">
-      <div className="chat-messages">
-        {messages.length === 0 ? (
-          <Empty title="Contale qué estás buscando">
-            Por ejemplo: "necesito auriculares para viajar, hasta 200 dólares". Debajo de
-            cada respuesta vas a ver qué consultó en el catálogo.
-          </Empty>
-        ) : (
-          messages.map((message) => <ChatMessage key={message.id} message={message} />)
-        )}
+    <div className="chat-layout">
+      <section className="chat">
+        <div className="chat-messages">
+          {messages.length === 0 ? (
+            <Empty title="Contale qué estás buscando">
+              Por ejemplo: "necesito auriculares para viajar, hasta 200 dólares". Debajo de
+              cada respuesta vas a ver qué consultó en el catálogo.
+            </Empty>
+          ) : (
+            messages.map((message) => <ChatMessage key={message.id} message={message} />)
+          )}
 
-        {sending ? (
-          <p className="chat-pending" role="status">
-            <span className="spinner" aria-hidden="true" />
-            Consultando el catálogo...
-          </p>
-        ) : null}
+          {sending ? (
+            <p className="chat-pending" role="status">
+              <span className="spinner" aria-hidden="true" />
+              Consultando el catálogo...
+            </p>
+          ) : null}
 
-        <div ref={endRef} />
-      </div>
+          <div ref={endRef} />
+        </div>
 
-      <form className="chat-form" onSubmit={handleSubmit}>
-        <input
-          type="text"
-          value={draft}
-          onChange={(event) => setDraft(event.target.value)}
-          placeholder="Escribí lo que necesitás y apretá Enter"
-          aria-label="Mensaje para el asistente"
-          autoComplete="off"
+        <form className="chat-form" onSubmit={handleSubmit}>
+          <input
+            type="text"
+            value={draft}
+            onChange={(event) => setDraft(event.target.value)}
+            placeholder="Escribí lo que necesitás y apretá Enter"
+            aria-label="Mensaje para el asistente"
+            autoComplete="off"
+          />
+          <button type="submit" disabled={sending || draft.trim() === ''}>
+            {sending ? 'Enviando...' : 'Enviar'}
+          </button>
+        </form>
+      </section>
+
+      {/* El carrito queda a la vista mientras se conversa: el asistente lo
+          puede tocar, y lo que agrega se ve acá sin recargar. */}
+      <aside className="chat-cart">
+        <CartPanel
+          title="Carrito"
+          action={
+            <div className="checkout-actions">
+              <button type="button" className="button-secondary" onClick={onGoToCart}>
+                Ir al carrito y comprar
+              </button>
+            </div>
+          }
         />
-        <button type="submit" disabled={sending || draft.trim() === ''}>
-          {sending ? 'Enviando...' : 'Enviar'}
-        </button>
-      </form>
-    </section>
+      </aside>
+    </div>
   )
 }

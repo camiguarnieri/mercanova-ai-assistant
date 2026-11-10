@@ -8,6 +8,7 @@ import './styles/tokens.css'
 import './styles/catalog.css'
 import './styles/detail.css'
 import './styles/chat.css'
+import './styles/cart.css'
 
 createRoot(document.getElementById('root')).render(
   <StrictMode>
