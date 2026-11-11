@@ -1,12 +1,13 @@
 /** Vista de chat: la conversación con el asistente de compras. */
 
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 
 import { sendChatMessage } from '../api/client.js'
 import { useCart } from '../CartContext.jsx'
 import CartPanel from '../components/CartPanel.jsx'
 import ChatMessage, { ASSISTANT, ERROR, USER } from '../components/ChatMessage.jsx'
 import { Empty } from '../components/Notice.jsx'
+import VoiceInput from '../components/VoiceInput.jsx'
 
 /** Las herramientas con las que el asistente escribe el carrito. */
 const CART_TOOLS = ['add_to_cart', 'remove_from_cart']
@@ -20,6 +21,7 @@ export default function Chat({ onGoToCart }) {
   // Para numerar los mensajes: el texto se puede repetir, la clave no.
   const lastId = useRef(0)
   const endRef = useRef(null)
+  const inputRef = useRef(null)
 
   // Deja a la vista lo último que se dijo, como cualquier chat.
   useEffect(() => {
@@ -32,6 +34,13 @@ export default function Chat({ onGoToCart }) {
     const id = lastId.current
     setMessages((previous) => [...previous, { id, ...message }])
   }
+
+  // Escribe en el campo lo que se dictó, sin mandarlo: lo revisa el usuario.
+  // Si ya había texto, lo que se dictó se agrega al final.
+  const handleTranscript = useCallback((text) => {
+    setDraft((previous) => (previous.trim() === '' ? text : `${previous.trim()} ${text}`))
+    inputRef.current?.focus()
+  }, [])
 
   // Manda el mensaje y agrega la respuesta, o el error, a la conversación.
   async function handleSubmit(event) {
@@ -92,13 +101,15 @@ export default function Chat({ onGoToCart }) {
 
         <form className="chat-form" onSubmit={handleSubmit}>
           <input
+            ref={inputRef}
             type="text"
             value={draft}
             onChange={(event) => setDraft(event.target.value)}
-            placeholder="Escribí lo que necesitás y apretá Enter"
+            placeholder="Escribí o dictá lo que necesitás y apretá Enter"
             aria-label="Mensaje para el asistente"
             autoComplete="off"
           />
+          <VoiceInput onTranscript={handleTranscript} disabled={sending} />
           <button type="submit" disabled={sending || draft.trim() === ''}>
             {sending ? 'Enviando...' : 'Enviar'}
           </button>
