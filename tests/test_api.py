@@ -436,6 +436,50 @@ def test_the_failure_of_the_preload_is_logged_as_a_warning(
     assert "ollama serve" in caplog.text
 
 
+def test_an_unexpected_error_answers_a_500_in_json(
+    catalog_database: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    # Una excepción que ningún handler específico cubre: ni CatalogError, ni
+    # CartError, ni sqlite3.Error. Es la familia a la que pertenece un
+    # httpx.ReadTimeout, que hoy llegaría hasta acá.
+    def exploding_list(*args: object, **kwargs: object) -> None:
+        raise ZeroDivisionError("ruta interna /secreta/db y detalle del stack")
+
+    monkeypatch.setattr(api.catalog, "list_products", exploding_list)
+    api.app.dependency_overrides[api.get_connection_scope] = lambda: partial(
+        db.connection_scope, catalog_database
+    )
+    try:
+        # Sin raise_server_exceptions=False el cliente de test levanta la
+        # excepción y no se ve la respuesta que recibiría el usuario.
+        with TestClient(api.app, raise_server_exceptions=False) as test_client:
+            with caplog.at_level(logging.ERROR):
+                response = test_client.get("/products")
+    finally:
+        api.app.dependency_overrides.clear()
+
+    assert response.status_code == 500
+    # No el "Internal Server Error" en texto plano de Starlette.
+    assert response.headers["content-type"].startswith("application/json")
+    assert "detail" in response.json()
+    assert "error inesperado" in response.json()["detail"]
+    # El mensaje real no viaja al cliente, pero sí queda en el log.
+    assert "/secreta/db" not in response.text
+    assert "ZeroDivisionError" not in response.text
+    assert "/secreta/db" in caplog.text
+
+
+def test_an_unexpected_error_does_not_take_over_the_specific_handlers(
+    client: TestClient,
+) -> None:
+    # El handler de Exception no puede tapar los de arriba: Starlette recorre el
+    # MRO y el más específico gana. Un producto inexistente sigue siendo 404.
+    response = client.get("/products/MN-NO-EXISTE")
+
+    assert response.status_code == 404
+    assert "error inesperado" not in response.json()["detail"]
+
+
 def test_the_api_answers_503_when_the_database_is_not_loaded(tmp_path: Path) -> None:
     empty_database = tmp_path / "vacia.db"
 

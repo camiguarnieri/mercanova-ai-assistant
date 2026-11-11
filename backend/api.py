@@ -201,6 +201,40 @@ def handle_sqlite_error(request: Request, error: sqlite3.Error) -> JSONResponse:
     )
 
 
+# Última red: lo que no previmos sale como JSON, no como texto plano.
+@app.exception_handler(Exception)
+def handle_unexpected_error(request: Request, error: Exception) -> JSONResponse:
+    """Traduce cualquier error no previsto a un 500 con la forma del resto de la API.
+
+    Starlette solo llega acá cuando ningún handler específico se hizo cargo: la
+    búsqueda recorre el MRO de la excepción, así que los de arriba —404, 422,
+    409, 503— siguen ganando sobre este. Esto cubre lo que queda afuera, como
+    un `httpx.ReadTimeout`, que no es `OSError` y por eso `llm.py` no lo
+    traduce.
+
+    Sin esto el usuario recibe el `Internal Server Error` en texto plano que
+    escribe Starlette, sin `detail`: el frontend lee `detail` para mostrar qué
+    pasó y se queda sin nada que mostrar.
+
+    El mensaje real de la excepción **no viaja al cliente**: puede traer rutas,
+    SQL o datos internos. Va al log del servidor, con su traceback, que es
+    donde el equipo lo puede leer.
+    """
+    logger.exception(
+        "Error no previsto atendiendo %s %s", request.method, request.url.path, exc_info=error
+    )
+    return JSONResponse(
+        status_code=500,
+        content={
+            "detail": (
+                "Ocurrió un error inesperado en el servidor y el pedido no se pudo "
+                "completar. Volvé a intentar; si sigue pasando, avisale al equipo con "
+                "la hora en que pasó: el detalle quedó registrado en el log del servidor."
+            )
+        },
+    )
+
+
 @app.get("/products", response_model=ProductPage, summary="Lista productos del catálogo")
 def read_products(
     category: str | None = Query(default=None, description="Nombre de la categoría."),
