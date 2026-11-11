@@ -436,6 +436,86 @@ def test_the_failure_of_the_preload_is_logged_as_a_warning(
     assert "ollama serve" in caplog.text
 
 
+def test_the_startup_logs_the_effective_configuration(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    monkeypatch.setenv("OLLAMA_MODEL", "llama3.1")
+    monkeypatch.delenv("OLLAMA_KEEP_ALIVE", raising=False)
+
+    with caplog.at_level(logging.INFO, logger="backend.api"):
+        with TestClient(api.app):
+            pass
+
+    assert "configuración efectiva" in caplog.text
+    # Un valor configurado y uno que es el default, distinguidos.
+    assert "OLLAMA_MODEL" in caplog.text
+    assert "llama3.1" in caplog.text
+    assert api.config_report.FROM_ENVIRONMENT in caplog.text
+    assert api.llm.DEFAULT_KEEP_ALIVE in caplog.text
+    assert api.config_report.FROM_DEFAULT in caplog.text
+
+
+def test_the_startup_logs_the_cors_origins_that_were_enabled(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    monkeypatch.setenv("FRONTEND_ORIGINS", "http://miapp:3000")
+
+    with caplog.at_level(logging.INFO, logger="backend.api"):
+        with TestClient(api.app):
+            pass
+
+    assert "http://miapp:3000" in caplog.text
+
+
+def test_the_configuration_is_logged_before_the_preloads(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Si el preload falla o tarda, la configuración ya tiene que haberse visto.
+    events: list[str] = []
+    real_log = api.config_report.log_configuration
+
+    def recording_log(*args: object, **kwargs: object) -> None:
+        events.append("configuración")
+        real_log(*args, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(api.config_report, "log_configuration", recording_log)
+    monkeypatch.setattr(api, "ensure_schema", lambda: events.append("esquema"))
+    monkeypatch.setattr(api, "preload_assistant", lambda: events.append("modelo"))
+    monkeypatch.setattr(api, "preload_vocabulary", lambda: events.append("vocabulario"))
+
+    with TestClient(api.app):
+        pass
+
+    assert events == ["configuración", "esquema", "modelo", "vocabulario"]
+
+
+def test_a_broken_configuration_value_does_not_break_the_startup(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    # El log de configuración no puede ser el que tire la aplicación.
+    monkeypatch.setenv("OLLAMA_TIMEOUT", "cero")
+
+    with caplog.at_level(logging.INFO, logger="backend.api"):
+        with TestClient(api.app) as test_client:
+            response = test_client.get("/products")
+
+    assert response.status_code == 200
+    assert "no se pudo resolver" in caplog.text
+
+
+def test_the_startup_does_not_log_a_variable_outside_the_report(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    monkeypatch.setenv("OLLAMA_API_KEY", "sk-no-imprimir-esto")
+
+    with caplog.at_level(logging.INFO, logger="backend.api"):
+        with TestClient(api.app):
+            pass
+
+    assert "configuración efectiva" in caplog.text
+    assert "sk-no-imprimir-esto" not in caplog.text
+
+
 def test_an_unexpected_error_answers_a_500_in_json(
     catalog_database: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:

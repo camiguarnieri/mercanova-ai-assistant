@@ -16,7 +16,18 @@ from fastapi import Depends, FastAPI, Path, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
-from backend import cart, cart_api, catalog, chat_api, db, inventory, llm, orders, vocabulary
+from backend import (
+    cart,
+    cart_api,
+    catalog,
+    chat_api,
+    config_report,
+    db,
+    inventory,
+    llm,
+    orders,
+    vocabulary,
+)
 from backend.dependencies import ConnectionScope, get_connection_scope
 from backend.models import Brand, Category, ProductDetail, ProductPage
 
@@ -85,9 +96,31 @@ def ensure_schema() -> None:
         )
 
 
+# Deja el log de la aplicación en INFO, que es donde sale la configuración.
+def configure_logging() -> None:
+    """Prepara el logging para que las líneas de `backend` salgan en pantalla.
+
+    Uvicorn configura sus propios loggers y no el raíz, así que sin esto un
+    `logger.info()` de un módulo de `backend` no se imprime en ningún lado y el
+    reporte de configuración no se vería. Los loggers de uvicorn tienen
+    `propagate: false`, así que esto no le duplica las líneas.
+
+    `basicConfig` no hace nada si el logger raíz ya tiene handlers, así que no
+    pisa una configuración que haya armado quien levanta la aplicación.
+    """
+    logging.basicConfig(level=logging.INFO, format="%(levelname)s:     %(message)s")
+
+
 @asynccontextmanager
 async def lifespan(application: FastAPI) -> AsyncIterator[None]:
-    """Corre las precargas del asistente cuando arranca la aplicación."""
+    """Corre las precargas del asistente cuando arranca la aplicación.
+
+    La configuración se loguea **primero**: cargar el modelo tarda unos
+    segundos y puede fallar, y en los dos casos conviene haber visto ya con qué
+    valores está corriendo la aplicación.
+    """
+    configure_logging()
+    config_report.log_configuration(logger, frontend_origins=allowed_origins())
     ensure_schema()
     preload_assistant()
     preload_vocabulary()
