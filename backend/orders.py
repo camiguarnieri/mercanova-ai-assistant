@@ -9,6 +9,13 @@ que llegue a estas funciones.
 La orden y el descuento de stock se escriben en la misma transacción: si algo
 falla, no queda ni la orden ni el stock descontado.
 
+Y toda la secuencia —leer el carrito, validarlo, escribir la orden, vaciarlo—
+corre adentro del lock de esa sesión. La transacción sola no alcanzaba: el
+carrito vive en la memoria del proceso, así que dos pedidos simultáneos leían el
+mismo carrito, los dos pasaban la validación y los dos escribían su orden. El
+segundo pedido ahora encuentra el carrito ya vacío y recibe un 409. Está escrito
+en `docs/decision-concurrencia-checkout.md`.
+
 Los precios se vuelven a leer del catálogo al confirmar y se copian en la
 orden: lo que queda guardado es lo que el usuario confirmó, aunque después el
 catálogo cambie.
@@ -132,52 +139,62 @@ def checkout(
             completo. En ese caso la transacción se deshace entera y el
             carrito queda como estaba.
     """
-    lines = checked_lines(connection, cart.view(connection, store, session_id))
-    created_at = datetime.now(timezone.utc)
-    order = Order(
-        order_id=new_order_id(created_at),
-        session_id=session_id,
-        created_at=created_at,
-        customer_name=customer_name.strip(),
-        shipping_address=shipping_address.strip(),
-        currency=lines[0].currency,
-        total_amount=cart_view.money(sum(line.line_total for line in lines)),
-        items=lines,
-    )
-
-    # Una sola transacción: la orden, sus líneas y el descuento de stock entran
-    # juntos o no entra nada.
-    with connection:
-        connection.execute(
-            orders_sql.INSERT_ORDER,
-            [
-                order.order_id,
-                order.session_id,
-                order.created_at.isoformat(),
-                order.customer_name,
-                order.shipping_address,
-                order.currency,
-                order.total_amount,
-            ],
+    # Toda la secuencia va adentro del lock de la sesión: leer el carrito,
+    # validarlo, escribir la orden y vaciarlo. La transacción de SQLite sola no
+    # alcanza, porque el carrito vive en la memoria del proceso y no en la base:
+    # dos pedidos simultáneos leían el mismo carrito, los dos lo validaban y los
+    # dos escribían su orden, y el stock se descontaba dos veces.
+    #
+    # El lock es por sesión: el checkout de otra persona no espera a este.
+    with store.session_lock(session_id):
+        lines = checked_lines(connection, cart.view(connection, store, session_id))
+        created_at = datetime.now(timezone.utc)
+        order = Order(
+            order_id=new_order_id(created_at),
+            session_id=session_id,
+            created_at=created_at,
+            customer_name=customer_name.strip(),
+            shipping_address=shipping_address.strip(),
+            currency=lines[0].currency,
+            total_amount=cart_view.money(sum(line.line_total for line in lines)),
+            items=lines,
         )
-        for line in lines:
+
+        # Una sola transacción: la orden, sus líneas y el descuento de stock
+        # entran juntos o no entra nada.
+        with connection:
             connection.execute(
-                orders_sql.INSERT_ORDER_ITEM,
+                orders_sql.INSERT_ORDER,
                 [
                     order.order_id,
-                    line.product_id,
-                    line.name,
-                    line.quantity,
-                    line.unit_price,
-                    line.currency,
-                    line.line_total,
+                    order.session_id,
+                    order.created_at.isoformat(),
+                    order.customer_name,
+                    order.shipping_address,
+                    order.currency,
+                    order.total_amount,
                 ],
             )
-            inventory.reduce_stock(connection, line.product_id, line.quantity)
+            for line in lines:
+                connection.execute(
+                    orders_sql.INSERT_ORDER_ITEM,
+                    [
+                        order.order_id,
+                        line.product_id,
+                        line.name,
+                        line.quantity,
+                        line.unit_price,
+                        line.currency,
+                        line.line_total,
+                    ],
+                )
+                inventory.reduce_stock(connection, line.product_id, line.quantity)
 
-    # Recién con la orden escrita se vacía el carrito: si lo anterior falla, el
-    # usuario sigue teniendo lo que había elegido.
-    store.clear(session_id)
+        # Recién con la orden escrita se vacía el carrito: si lo anterior falla,
+        # el usuario sigue teniendo lo que había elegido. Y pasa adentro del
+        # lock, así el pedido que esté esperando ve el carrito ya vacío y no
+        # vuelve a comprar lo mismo.
+        store.clear(session_id)
     return order
 
 

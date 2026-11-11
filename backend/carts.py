@@ -10,6 +10,8 @@ validación de stock y el armado del carrito con precios están en `cart.py`.
 
 from __future__ import annotations
 
+from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
 from threading import Lock
 
@@ -26,11 +28,20 @@ class CartStore:
     Los métodos toman un lock por lo mismo que `SessionStore`: FastAPI corre los
     endpoints sincrónicos en un threadpool y dos pedidos de la misma pestaña
     pueden escribir el mismo carrito a la vez.
+
+    Ese lock hace que cada método sea atómico, que no es lo mismo que hacer
+    atómica una secuencia de varios. Para eso está `session_lock()`, que usa el
+    checkout.
     """
 
     def __init__(self) -> None:
         self._carts: dict[str, dict[str, int]] = {}
         self._lock = Lock()
+        # Un lock por sesión, para las operaciones que son varios pasos. Está
+        # aparte de `_lock`: ese se toma por microsegundos para tocar los
+        # diccionarios, y estos se mantienen tomados durante toda una operación,
+        # que adentro vuelve a llamar a los métodos de acá.
+        self._session_locks: dict[str, Lock] = {}
 
     # Devuelve las cantidades por producto de una sesión.
     def items(self, session_id: str) -> dict[str, int]:
@@ -102,6 +113,42 @@ class CartStore:
         """
         with self._lock:
             self._carts.pop(session_id, None)
+
+    # Deja pasar una sola operación por vez sobre el carrito de una sesión.
+    @contextmanager
+    def session_lock(self, session_id: str) -> Iterator[None]:
+        """Serializa las operaciones de varios pasos sobre un mismo carrito.
+
+        Los métodos de esta clase son atómicos de a uno, pero una operación que
+        lee el carrito, decide algo y después lo escribe no lo es: entre la
+        lectura y la escritura puede entrar otro pedido. El checkout es el caso
+        que importa, porque su escritura no se puede deshacer.
+
+        **El lock es por sesión y no uno global**: dos sesiones distintas toman
+        locks distintos y no se esperan entre ellas, así una compra no hace fila
+        detrás de la de otra persona.
+
+        Se libera al salir del bloque, también si lo que pasó adentro falló: es
+        un `with` sobre un `Lock`, no un par de llamadas a mano.
+
+        No hay riesgo de deadlock con SQLite: adentro del bloque siempre se toma
+        primero este lock y después el de la base, nunca al revés, y un hilo
+        tiene como máximo un lock de sesión, así que no hay espera circular.
+
+        Args:
+            session_id: Identificador de la sesión dueña del carrito.
+
+        Yields:
+            Nada: lo que importa es el bloque, no un valor.
+        """
+        # El `_lock` se toma solo para buscar o crear el lock de la sesión, y se
+        # suelta antes de esperarlo: si se lo mantuviera, un checkout en curso
+        # bloquearía a todas las demás sesiones y esto sería un lock global con
+        # pasos extra.
+        with self._lock:
+            lock = self._session_locks.setdefault(session_id, Lock())
+        with lock:
+            yield
 
     # Cuántos carritos hay abiertos; se usa para verificar el comportamiento.
     def count(self) -> int:
