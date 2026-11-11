@@ -44,6 +44,9 @@ class FakeClient:
 
     def __init__(self, *, responses: list[FakeResponse] | None = None, **kwargs: Any) -> None:
         self.host = kwargs.get("host")
+        # Se guarda para poder verificar que `create_client()` lo manda: sin un
+        # timeout, httpx espera para siempre.
+        self.timeout = kwargs.get("timeout")
         self.responses = list(responses or [])
         self.calls: list[dict[str, Any]] = []
 

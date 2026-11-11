@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 from typing import Any
 
+import httpx
 import pytest
 from ollama import RequestError, ResponseError
 
@@ -142,6 +143,132 @@ def test_a_request_error_is_translated_too() -> None:
 
     with pytest.raises(llm.LLMConfigurationError):
         llm.preload_model(BrokenClient())
+
+
+def test_the_timeout_comes_from_the_environment(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("OLLAMA_TIMEOUT", "45")
+
+    assert llm.timeout_seconds() == 45.0
+
+
+@pytest.mark.parametrize("configured", ["", "   "])
+def test_an_empty_timeout_falls_back_to_the_default(
+    monkeypatch: pytest.MonkeyPatch, configured: str
+) -> None:
+    monkeypatch.setenv("OLLAMA_TIMEOUT", configured)
+
+    assert llm.timeout_seconds() == llm.DEFAULT_TIMEOUT
+
+
+def test_the_timeout_has_a_safe_default(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("OLLAMA_TIMEOUT", raising=False)
+
+    assert llm.timeout_seconds() == llm.DEFAULT_TIMEOUT
+
+
+def test_the_default_timeout_is_generous_enough_for_cpu() -> None:
+    # El turno más lento de corrida.log tardó 431.4s con una vuelta de
+    # herramientas: dos llamadas al modelo, unos 215s cada una. Un timeout por
+    # llamada por debajo de eso cortaría una conversación que hoy funciona.
+    assert llm.DEFAULT_TIMEOUT >= 215.0
+
+
+@pytest.mark.parametrize("configured", ["cero", "0", "-30", "nan", "inf"])
+def test_a_timeout_that_is_not_a_positive_number_is_rejected(
+    monkeypatch: pytest.MonkeyPatch, configured: str
+) -> None:
+    # Con 'inf' el timeout volvería a ser infinito, que es lo que esto evita.
+    monkeypatch.setenv("OLLAMA_TIMEOUT", configured)
+
+    with pytest.raises(llm.LLMConfigurationError) as error:
+        llm.timeout_seconds()
+
+    assert "OLLAMA_TIMEOUT" in str(error.value)
+
+
+def test_the_client_is_created_with_the_configured_timeout(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Sin esto el cliente queda con el default de la librería, que es esperar
+    # para siempre.
+    monkeypatch.setenv("OLLAMA_TIMEOUT", "90")
+    monkeypatch.setattr(llm, "Client", FakeClient)
+
+    assert llm.create_client().timeout == 90.0
+
+
+def test_the_client_is_created_with_a_timeout_by_default(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("OLLAMA_TIMEOUT", raising=False)
+    monkeypatch.setattr(llm, "Client", FakeClient)
+
+    assert llm.create_client().timeout == llm.DEFAULT_TIMEOUT
+
+
+def test_a_read_timeout_is_translated_to_a_timeout_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # httpx.ReadTimeout no hereda de OSError: sin nombrarlo subía crudo hasta el
+    # handler genérico de la API y el usuario veía un 500 sin explicación.
+    monkeypatch.setenv("OLLAMA_TIMEOUT", "120")
+
+    class SlowClient(FakeClient):
+        def chat(self, **kwargs: Any) -> FakeResponse:
+            raise httpx.ReadTimeout("timed out")
+
+    with pytest.raises(llm.LLMTimeoutError) as error:
+        llm.run_conversation(
+            llm.start_conversation("Hola"),
+            tools=[],
+            execute_tool=lambda name, arguments: {},
+            client=SlowClient(),
+        )
+
+    # El mensaje dice qué hacer y con qué número se cortó, sin inventarlo.
+    assert "tardando demasiado" in str(error.value)
+    assert "120" in str(error.value)
+    assert "OLLAMA_TIMEOUT" in str(error.value)
+
+
+def test_a_read_timeout_during_the_preload_is_translated_too() -> None:
+    class SlowClient(FakeClient):
+        def chat(self, **kwargs: Any) -> FakeResponse:
+            raise httpx.ReadTimeout("timed out")
+
+    with pytest.raises(llm.LLMTimeoutError) as error:
+        llm.preload_model(SlowClient())
+
+    assert "tardando demasiado" in str(error.value)
+
+
+def test_a_connect_timeout_is_a_timeout_too() -> None:
+    # Es otra rama de httpx.TimeoutException: para el usuario es lo mismo.
+    class SlowClient(FakeClient):
+        def chat(self, **kwargs: Any) -> FakeResponse:
+            raise httpx.ConnectTimeout("timed out")
+
+    with pytest.raises(llm.LLMTimeoutError):
+        llm.preload_model(SlowClient())
+
+
+def test_a_broken_response_is_translated_to_a_timeout_error() -> None:
+    # Ollama se murió a mitad de la respuesta: típicamente se quedó sin memoria.
+    class DyingClient(FakeClient):
+        def chat(self, **kwargs: Any) -> FakeResponse:
+            raise httpx.RemoteProtocolError("server disconnected")
+
+    with pytest.raises(llm.LLMTimeoutError) as error:
+        llm.preload_model(DyingClient())
+
+    assert "cortó la respuesta" in str(error.value)
+    assert "ollama serve" in str(error.value)
+
+
+def test_a_timeout_error_is_an_llm_error() -> None:
+    # Es lo que hace que termine en el 503 de chat_api, que captura LLMError.
+    assert issubclass(llm.LLMTimeoutError, llm.LLMError)
+    assert not issubclass(llm.LLMTimeoutError, llm.LLMConfigurationError)
 
 
 def test_the_conversation_starts_with_the_system_prompt() -> None:
