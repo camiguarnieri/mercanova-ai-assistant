@@ -1,0 +1,58 @@
+# Qué NO se le manda al demonio de Docker como contexto de build.
+#
+# Los dos Dockerfile usan la raíz del repositorio como contexto, así que sin
+# esto se subirían el entorno virtual, los node_modules y la base ya cargada:
+# cientos de megas por build, y encima la base del contenedor terminaría siendo
+# una copia de la de desarrollo.
+#
+# Ojo con los patrones: acá `*.db` solo valdría para la raíz, así que todo lo
+# que puede estar en una subcarpeta se escribe con `**/`.
+
+# Entornos y dependencias: se instalan adentro de la imagen.
+.venv/
+venv/
+**/node_modules/
+
+# Compilados: la imagen del frontend compila de nuevo.
+frontend/dist/
+dist/
+build/
+
+# Python
+**/__pycache__/
+**/*.py[cod]
+.pytest_cache/
+.coverage
+
+# Secretos y configuración local. El .env llega por `env_file` del compose, no
+# metido en la imagen: adentro de una imagen quedaría para cualquiera que la
+# tenga, y no se podría cambiar sin reconstruir.
+#
+# El .env.example sí entra: no tiene secretos —está versionado— y
+# tests/test_environment.py comprueba que cada variable del proyecto esté
+# documentada ahí. Sin él, la suite falla adentro del contenedor.
+.env
+.env.*
+!.env.example
+
+# La base de desarrollo. La del contenedor la crea y carga el entrypoint.
+**/*.db
+**/*.sqlite
+**/*.sqlite3
+
+# Lo que no hace falta para construir ni para correr.
+.git/
+.gitignore
+.gitattributes
+.claude/
+.vscode/
+.idea/
+docs/
+**/*.log
+
+# Los .md no hacen falta para construir ni para correr, con una excepción:
+# AGENTS.md, que tests/test_environment.py busca en la raíz del repositorio
+# para verificar que el .env se resuelva contra ella. Si se saca, la suite da
+# distinto adentro y afuera del contenedor.
+**/*.md
+!AGENTS.md

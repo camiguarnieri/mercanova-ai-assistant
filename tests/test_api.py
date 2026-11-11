@@ -436,6 +436,138 @@ def test_the_failure_of_the_preload_is_logged_as_a_warning(
     assert "ollama serve" in caplog.text
 
 
+def test_the_startup_logs_the_effective_configuration(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    monkeypatch.setenv("OLLAMA_MODEL", "llama3.1")
+    monkeypatch.delenv("OLLAMA_KEEP_ALIVE", raising=False)
+
+    with caplog.at_level(logging.INFO, logger="backend.api"):
+        with TestClient(api.app):
+            pass
+
+    assert "configuración efectiva" in caplog.text
+    # Un valor configurado y uno que es el default, distinguidos.
+    assert "OLLAMA_MODEL" in caplog.text
+    assert "llama3.1" in caplog.text
+    assert api.config_report.FROM_ENVIRONMENT in caplog.text
+    assert api.llm.DEFAULT_KEEP_ALIVE in caplog.text
+    assert api.config_report.FROM_DEFAULT in caplog.text
+
+
+def test_the_startup_quiets_the_http_client_log() -> None:
+    # Con el raíz en INFO, httpx imprime una línea por cada pedido a Ollama:
+    # son varias por turno y tapan el log de la aplicación.
+    api.configure_logging()
+
+    assert logging.getLogger("httpx").level == logging.WARNING
+
+
+def test_the_startup_logs_the_cors_origins_that_were_enabled(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    monkeypatch.setenv("FRONTEND_ORIGINS", "http://miapp:3000")
+
+    with caplog.at_level(logging.INFO, logger="backend.api"):
+        with TestClient(api.app):
+            pass
+
+    assert "http://miapp:3000" in caplog.text
+
+
+def test_the_configuration_is_logged_before_the_preloads(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Si el preload falla o tarda, la configuración ya tiene que haberse visto.
+    events: list[str] = []
+    real_log = api.config_report.log_configuration
+
+    def recording_log(*args: object, **kwargs: object) -> None:
+        events.append("configuración")
+        real_log(*args, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(api.config_report, "log_configuration", recording_log)
+    monkeypatch.setattr(api, "ensure_schema", lambda: events.append("esquema"))
+    monkeypatch.setattr(api, "preload_assistant", lambda: events.append("modelo"))
+    monkeypatch.setattr(api, "preload_vocabulary", lambda: events.append("vocabulario"))
+
+    with TestClient(api.app):
+        pass
+
+    assert events == ["configuración", "esquema", "modelo", "vocabulario"]
+
+
+def test_a_broken_configuration_value_does_not_break_the_startup(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    # El log de configuración no puede ser el que tire la aplicación.
+    monkeypatch.setenv("OLLAMA_TIMEOUT", "cero")
+
+    with caplog.at_level(logging.INFO, logger="backend.api"):
+        with TestClient(api.app) as test_client:
+            response = test_client.get("/products")
+
+    assert response.status_code == 200
+    assert "no se pudo resolver" in caplog.text
+
+
+def test_the_startup_does_not_log_a_variable_outside_the_report(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    monkeypatch.setenv("OLLAMA_API_KEY", "sk-no-imprimir-esto")
+
+    with caplog.at_level(logging.INFO, logger="backend.api"):
+        with TestClient(api.app):
+            pass
+
+    assert "configuración efectiva" in caplog.text
+    assert "sk-no-imprimir-esto" not in caplog.text
+
+
+def test_an_unexpected_error_answers_a_500_in_json(
+    catalog_database: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    # Una excepción que ningún handler específico cubre: ni CatalogError, ni
+    # CartError, ni sqlite3.Error. Es la familia a la que pertenece un
+    # httpx.ReadTimeout, que hoy llegaría hasta acá.
+    def exploding_list(*args: object, **kwargs: object) -> None:
+        raise ZeroDivisionError("ruta interna /secreta/db y detalle del stack")
+
+    monkeypatch.setattr(api.catalog, "list_products", exploding_list)
+    api.app.dependency_overrides[api.get_connection_scope] = lambda: partial(
+        db.connection_scope, catalog_database
+    )
+    try:
+        # Sin raise_server_exceptions=False el cliente de test levanta la
+        # excepción y no se ve la respuesta que recibiría el usuario.
+        with TestClient(api.app, raise_server_exceptions=False) as test_client:
+            with caplog.at_level(logging.ERROR):
+                response = test_client.get("/products")
+    finally:
+        api.app.dependency_overrides.clear()
+
+    assert response.status_code == 500
+    # No el "Internal Server Error" en texto plano de Starlette.
+    assert response.headers["content-type"].startswith("application/json")
+    assert "detail" in response.json()
+    assert "error inesperado" in response.json()["detail"]
+    # El mensaje real no viaja al cliente, pero sí queda en el log.
+    assert "/secreta/db" not in response.text
+    assert "ZeroDivisionError" not in response.text
+    assert "/secreta/db" in caplog.text
+
+
+def test_an_unexpected_error_does_not_take_over_the_specific_handlers(
+    client: TestClient,
+) -> None:
+    # El handler de Exception no puede tapar los de arriba: Starlette recorre el
+    # MRO y el más específico gana. Un producto inexistente sigue siendo 404.
+    response = client.get("/products/MN-NO-EXISTE")
+
+    assert response.status_code == 404
+    assert "error inesperado" not in response.json()["detail"]
+
+
 def test_the_api_answers_503_when_the_database_is_not_loaded(tmp_path: Path) -> None:
     empty_database = tmp_path / "vacia.db"
 

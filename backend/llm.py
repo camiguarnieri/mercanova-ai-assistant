@@ -12,6 +12,7 @@ import os
 from collections.abc import Callable, Sequence
 from typing import Any
 
+import httpx
 from ollama import Client, RequestError, ResponseError
 
 from backend.prompts import SYSTEM_PROMPT
@@ -36,6 +37,37 @@ MAX_TOOL_STEPS = 5
 # que se retoma más tarde lo vuelve a pagar.
 DEFAULT_KEEP_ALIVE = "30m"
 
+# Cuántos segundos se espera **cada** llamada al modelo antes de cortarla. La
+# librería `ollama` no pone ninguno: su default es `timeout=None`, que en httpx
+# significa esperar para siempre, así que sin esto un pedido del usuario se
+# cuelga indefinidamente si el modelo no contesta.
+#
+# El valor sale de la corrida de siete turnos que está en `corrida.log`, en CPU:
+# el turno más lento tardó 431.4s con una vuelta de herramientas, o sea dos
+# llamadas al modelo, unos 215s cada una. 300s deja alrededor de un 40% de
+# margen sobre eso para una máquina más lenta que la de la medición.
+#
+# Es por llamada, no por turno: con MAX_TOOL_STEPS un turno puede encadenar
+# varias, así que el tope de un turno completo es este número por la cantidad de
+# vueltas. Alcanza para lo que importa, que es que la espera sea finita.
+DEFAULT_TIMEOUT = 300.0
+
+# Todo lo que puede salir mal al hablar con Ollama, en un solo lugar: las dos
+# llamadas que lo hacen —`preload_model()` y `run_conversation()`— capturan esto
+# y lo pasan por `translate_error()`.
+#
+# Los dos de httpx están acá porque la librería `ollama` no los traduce: solo
+# convierte `httpx.ConnectError` en `ConnectionError`, y ninguno de los dos
+# hereda de `OSError`, así que sin nombrarlos subirían crudos hasta el handler
+# genérico de la API.
+OLLAMA_FAILURES = (
+    ResponseError,
+    RequestError,
+    ConnectionError,
+    OSError,
+    httpx.TimeoutException,
+    httpx.RemoteProtocolError,
+)
 
 
 class LLMError(RuntimeError):
@@ -48,6 +80,15 @@ class LLMConfigurationError(LLMError):
 
 class LLMResponseError(LLMError):
     """El modelo contestó algo que no se puede usar."""
+
+
+class LLMTimeoutError(LLMError):
+    """El modelo no contestó dentro del tiempo que se le dio.
+
+    No es ni un error de configuración —Ollama está prendido y el modelo está
+    instalado— ni una respuesta inservible: no hubo respuesta. Por eso es una
+    rama propia de `LLMError`, y como tal termina en el mismo 503 que las otras.
+    """
 
 
 # Devuelve el modelo configurado, con default seguro.
@@ -157,6 +198,43 @@ def keep_alive() -> str:
     return (os.getenv("OLLAMA_KEEP_ALIVE") or "").strip() or DEFAULT_KEEP_ALIVE
 
 
+# Devuelve cuántos segundos se espera cada llamada al modelo, con default seguro.
+def timeout_seconds() -> float:
+    """Resuelve el tiempo máximo de espera de una llamada a Ollama.
+
+    No se valida con `token_count()` porque eso cuenta tokens enteros y esto son
+    segundos, que pueden tener decimales.
+
+    Returns:
+        El valor de `OLLAMA_TIMEOUT`, o `DEFAULT_TIMEOUT` si no está definida.
+
+    Raises:
+        LLMConfigurationError: Si está definida y no es un número positivo. No
+            se cae al default a propósito, por lo mismo que `token_count()`: si
+            alguien lo configuró, usar otro número por su cuenta es peor que
+            avisar que el valor está mal escrito.
+    """
+    configured = (os.getenv("OLLAMA_TIMEOUT") or "").strip()
+    if not configured:
+        return DEFAULT_TIMEOUT
+    fallback = f"Dejala vacía para usar {DEFAULT_TIMEOUT}."
+    try:
+        value = float(configured)
+    except ValueError as error:
+        raise LLMConfigurationError(
+            f"OLLAMA_TIMEOUT tiene que ser un número de segundos, y llegó "
+            f"'{configured}'. {fallback}"
+        ) from error
+    # 'nan' e 'inf' son números para float() pero no son una espera: con 'inf' el
+    # timeout volvería a ser infinito, que es justo lo que esto evita.
+    if value != value or value == float("inf") or value <= 0:
+        raise LLMConfigurationError(
+            f"OLLAMA_TIMEOUT tiene que ser un número de segundos mayor que cero, y "
+            f"llegó '{configured}'. {fallback}"
+        )
+    return value
+
+
 # Arma las opciones de generación que viajan en cada llamada al modelo.
 def options() -> dict[str, Any]:
     """Devuelve las opciones con las que se le pide al modelo que responda.
@@ -183,20 +261,33 @@ def create_client() -> Client:
     """Crea el cliente de Ollama.
 
     Returns:
-        El cliente, apuntado al host de `host()`.
+        El cliente, apuntado al host de `host()` y con el timeout de
+        `timeout_seconds()`. El timeout se pone acá y no en cada llamada porque
+        `Client` lo guarda en el httpx de abajo: así ninguna llamada se puede
+        olvidar de ponerlo.
+
+    Raises:
+        LLMConfigurationError: Si `OLLAMA_TIMEOUT` no sirve.
     """
-    return Client(host=host())
+    return Client(host=host(), timeout=timeout_seconds())
 
 
 # Traduce los errores de Ollama a mensajes que digan qué hacer.
-def translate_error(error: Exception) -> LLMConfigurationError:
+def translate_error(error: Exception) -> LLMError:
     """Convierte un error de la librería en uno de este proyecto.
 
+    La librería `ollama` solo traduce `httpx.ConnectError` a `ConnectionError`:
+    el resto de los errores de httpx suben tal como vienen, así que se
+    reconocen acá.
+
     Args:
-        error: La excepción que levantó la librería `ollama`.
+        error: La excepción que levantó la librería `ollama`, o el httpx que
+            dejó pasar.
 
     Returns:
-        El error con el mensaje accionable, listo para levantar.
+        El error con el mensaje accionable, listo para levantar: un
+        `LLMTimeoutError` si el modelo no contestó a tiempo, si no un
+        `LLMConfigurationError`.
     """
     model = model_name()
     detail = str(error)
@@ -205,6 +296,23 @@ def translate_error(error: Exception) -> LLMConfigurationError:
     ):
         return LLMConfigurationError(
             f"No se encontró el modelo '{model}' en Ollama. Instalalo con: ollama pull {model}"
+        )
+    # Se mira la base `TimeoutException` y no solo `ReadTimeout` para que
+    # también entren el de conexión y el de escritura: los tres son la misma
+    # cosa para el usuario, que es que la espera se agotó.
+    if isinstance(error, httpx.TimeoutException):
+        return LLMTimeoutError(
+            f"El modelo '{model}' está tardando demasiado en responder y se cortó la "
+            f"espera a los {timeout_seconds():g} segundos. Probá de nuevo en un momento; "
+            f"si sigue pasando, subí OLLAMA_TIMEOUT o usá un modelo más chico."
+        )
+    # Ollama cortó la conexión a mitad de la respuesta: típicamente se quedó sin
+    # memoria cargando el modelo, o lo mataron mientras generaba.
+    if isinstance(error, httpx.RemoteProtocolError):
+        return LLMTimeoutError(
+            f"Ollama cortó la respuesta del modelo '{model}' antes de terminarla. "
+            f"Probá de nuevo en un momento; si sigue pasando, revisá que a la máquina "
+            f"no le falte memoria para este modelo y mirá el log de ollama serve."
         )
     return LLMConfigurationError(
         f"No se pudo hablar con Ollama en {host()}. Verificá que esté corriendo "
@@ -230,14 +338,15 @@ def preload_model(client: Client | None = None) -> None:
 
     Raises:
         LLMConfigurationError: Si Ollama no responde, el modelo no está o
-            `OLLAMA_NUM_CTX` no sirve.
+            `OLLAMA_NUM_CTX` u `OLLAMA_TIMEOUT` no sirven.
+        LLMTimeoutError: Si cargar el modelo no entró en `OLLAMA_TIMEOUT`.
     """
     target = client or create_client()
     try:
         target.chat(
             model=model_name(), messages=[], options=options(), keep_alive=keep_alive()
         )
-    except (ResponseError, RequestError, ConnectionError, OSError) as error:
+    except OLLAMA_FAILURES as error:
         raise translate_error(error) from error
 
 
@@ -284,6 +393,9 @@ def run_conversation(
 
     Raises:
         LLMConfigurationError: Si Ollama no responde o el modelo no está.
+        LLMTimeoutError: Si una llamada al modelo no entró en `OLLAMA_TIMEOUT`,
+            o si Ollama cortó la respuesta a mitad. El timeout es por llamada:
+            cada vuelta de herramientas tiene el suyo.
         LLMResponseError: Si el modelo sigue pidiendo herramientas después de
             `max_steps` vueltas, o si contesta sin contenido.
     """
@@ -299,7 +411,7 @@ def run_conversation(
                 options=options(),
                 keep_alive=keep_alive(),
             )
-        except (ResponseError, RequestError, ConnectionError, OSError) as error:
+        except OLLAMA_FAILURES as error:
             raise translate_error(error) from error
 
         message = getattr(response, "message", None)

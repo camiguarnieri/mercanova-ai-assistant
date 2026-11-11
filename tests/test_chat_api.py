@@ -12,6 +12,7 @@ from functools import partial
 from pathlib import Path
 from typing import Any
 
+import httpx
 import pytest
 from fake_ollama import (
     FakeClient,
@@ -398,6 +399,73 @@ def test_the_503_explains_an_unusable_answer(
 
     assert response.status_code == 503
     assert "vacío" in response.json()["detail"]
+
+
+def test_the_chat_answers_503_when_the_model_takes_too_long(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("OLLAMA_TIMEOUT", "120")
+
+    class SlowClient(FakeClient):
+        def chat(self, **kwargs: Any) -> FakeResponse:
+            raise httpx.ReadTimeout("timed out")
+
+    use_model(monkeypatch, SlowClient())
+
+    response = client.post("/chat", json={"session_id": "s-1", "message": "Hola"})
+
+    # No un 500 genérico y no una espera infinita: un 503 con qué hacer.
+    assert response.status_code == 503
+    assert "tardando demasiado" in response.json()["detail"]
+    assert "120" in response.json()["detail"]
+
+
+def test_the_chat_answers_503_when_ollama_cuts_the_response(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    class DyingClient(FakeClient):
+        def chat(self, **kwargs: Any) -> FakeResponse:
+            raise httpx.RemoteProtocolError("server disconnected")
+
+    use_model(monkeypatch, DyingClient())
+
+    response = client.post("/chat", json={"session_id": "s-1", "message": "Hola"})
+
+    assert response.status_code == 503
+    assert "cortó la respuesta" in response.json()["detail"]
+
+
+def test_a_timeout_does_not_reach_the_generic_error_handler(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # httpx.ReadTimeout no hereda de OSError. Antes de capturarlo en llm.py
+    # subía hasta el handler de Exception de api.py, que no sabe nada de Ollama
+    # y no puede decirle al usuario qué hacer.
+    class SlowClient(FakeClient):
+        def chat(self, **kwargs: Any) -> FakeResponse:
+            raise httpx.ReadTimeout("timed out")
+
+    use_model(monkeypatch, SlowClient())
+
+    with TestClient(api.app, raise_server_exceptions=False) as raw_client:
+        response = raw_client.post("/chat", json={"session_id": "s-1", "message": "Hola"})
+
+    assert response.status_code == 503
+    assert "error inesperado" not in response.json()["detail"]
+
+
+def test_a_timeout_does_not_leave_the_session_started(
+    client: TestClient, store: SessionStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    class SlowClient(FakeClient):
+        def chat(self, **kwargs: Any) -> FakeResponse:
+            raise httpx.ReadTimeout("timed out")
+
+    use_model(monkeypatch, SlowClient())
+
+    client.post("/chat", json={"session_id": "s-1", "message": "Hola"})
+
+    assert store.history("s-1") is None
 
 
 def test_a_failed_turn_does_not_leave_the_session_started(

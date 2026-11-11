@@ -257,11 +257,91 @@
 
 .chat-form {
   display: flex;
+  flex-wrap: wrap;
+  align-items: center;
   gap: var(--space-2);
 }
 
 .chat-form button {
   flex-shrink: 0;
+}
+
+/* Micrófono (RF-08): botón cuadrado al lado del campo, y el aviso de estado
+   en un renglón aparte. El `order` lo manda al final sin importar dónde esté
+   en el HTML, así el botón de enviar queda pegado al micrófono. */
+
+.mic-button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--space-2);
+  color: var(--color-accent);
+  background: transparent;
+  border: 1px solid var(--color-border);
+}
+
+.mic-button:hover:not(:disabled) {
+  background: var(--color-accent-soft);
+  border-color: var(--color-accent);
+}
+
+.mic-button-listening {
+  color: var(--color-surface);
+  background: var(--color-alert);
+  border-color: var(--color-alert);
+  animation: mic-breathe 1.4s ease-in-out infinite;
+}
+
+.mic-button-listening:hover:not(:disabled) {
+  background: var(--color-alert);
+  border-color: var(--color-alert);
+}
+
+.mic-status {
+  order: 1;
+  width: 100%;
+  margin: 0;
+  font-size: var(--text-xs);
+  color: var(--color-text-muted);
+}
+
+.mic-status-listening {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  color: var(--color-alert);
+}
+
+.mic-status-error {
+  color: var(--color-alert);
+}
+
+/* Punto que late mientras escucha: deja claro que el micrófono está abierto. */
+.mic-pulse {
+  width: 8px;
+  height: 8px;
+  flex-shrink: 0;
+  background: var(--color-alert);
+  border-radius: var(--radius-pill);
+  animation: mic-breathe 1.4s ease-in-out infinite;
+}
+
+@keyframes mic-breathe {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.45;
+  }
+}
+
+/* Respeta a quien pidió menos movimiento: queda el color, se va la animación. */
+@media (prefers-reduced-motion: reduce) {
+  .mic-button-listening,
+  .mic-pulse {
+    animation: none;
+  }
 }
 
 @media (max-width: 600px) {

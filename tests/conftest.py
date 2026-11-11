@@ -19,12 +19,43 @@ if str(REPO_ROOT) not in sys.path:
 
 import catalog_data  # noqa: E402  (módulo auxiliar de tests/)
 
-from backend import api, db  # noqa: E402  (después de ajustar sys.path)
+from backend import environment  # noqa: E402  (después de ajustar sys.path)
+
+# Antes de importar `backend.api`, que carga el `.env` al importarse: así el
+# archivo de esta máquina no se lee en ningún test. Tiene que ser acá y no en
+# una fixture porque los orígenes de CORS se resuelven cuando se arma el
+# middleware, al importar el módulo, antes de que corra cualquier fixture.
+environment.skip_env_file()
+
+from backend import api, db  # noqa: E402  (después de neutralizar el .env)
 
 # Las precargas reales, guardadas antes de reemplazarlas, para los tests que
 # verifican el arranque.
 PRELOAD_ASSISTANT = api.preload_assistant
 PRELOAD_VOCABULARY = api.preload_vocabulary
+
+
+@pytest.fixture(autouse=True)
+def without_the_project_environment(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Saca del entorno las variables del proyecto, en todos los tests.
+
+    El `skip_env_file()` de arriba se ocupa del archivo; esto se ocupa de la
+    otra fuente, que es lo que quien corre los tests tenga exportado en su
+    terminal. Sin esta limpieza, un test que espera el default del código
+    pasaría o fallaría según la máquina, que es justo lo que no puede pasar.
+
+    Se limpia la lista de `environment.PROJECT_VARIABLES`, así una variable
+    nueva queda cubierta sin que haya que acordarse de agregarla acá. Cada test
+    que necesita un valor lo pone con `monkeypatch.setenv`, y `monkeypatch`
+    devuelve el entorno a como estaba al terminar.
+
+    Se vuelve a dejar en vacío lo anotado como venido del archivo, por si un
+    test cargó uno propio: así una variable que otro test pone con `setenv` no
+    se reporta como venida de un `.env`.
+    """
+    for variable in environment.PROJECT_VARIABLES:
+        monkeypatch.delenv(variable, raising=False)
+    monkeypatch.setattr(environment, "_from_file", frozenset())
 
 
 @pytest.fixture(autouse=True)

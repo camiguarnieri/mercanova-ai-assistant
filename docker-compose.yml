@@ -1,0 +1,103 @@
+# MercaNova con Docker: `docker compose up --build` y queda andando.
+#
+# Lo que NO está acá es Ollama: corre en la máquina anfitriona, instalado
+# aparte, y el backend lo busca por host.docker.internal. El por qué, y las
+# limitaciones de eso en Linux, están en docs/decision-dockerizacion.md.
+#
+# Este archivo no reemplaza el camino manual con PowerShell: es una alternativa.
+# Las dos leen el mismo .env y usan el mismo código.
+
+services:
+  backend:
+    build:
+      context: .
+      dockerfile: docker/backend.Dockerfile
+    image: mercanova-backend
+
+    # La configuración sale del mismo .env que usa el camino manual. Si el
+    # archivo no existe —un repositorio recién clonado no lo trae, porque no se
+    # versiona— no pasa nada: el código tiene un default seguro para cada
+    # variable y la aplicación levanta igual.
+    env_file:
+      - path: .env
+        required: false
+
+    environment:
+      # Adentro del contenedor, "localhost" es el contenedor, no la máquina. El
+      # OLLAMA_HOST del .env apunta a localhost porque sirve para el camino
+      # manual, así que acá se reemplaza por el nombre que Docker resuelve a la
+      # máquina anfitriona. Este valor le gana al del env_file, que es lo que
+      # queremos: no hay forma de que un .env correcto para el camino manual
+      # rompa el de Docker.
+      #
+      # Si Ollama corriera en otra máquina, esto se cambia con un
+      # docker-compose.override.yml y no tocando este archivo.
+      OLLAMA_HOST: http://host.docker.internal:11434
+
+      # La base va al volumen, con ruta absoluta para que no dependa de desde
+      # dónde se ejecute el proceso.
+      DATABASE_PATH: /app/data/mercanova.db
+
+    extra_hosts:
+      # Docker Desktop (Windows y macOS) ya trae host.docker.internal resuelto;
+      # en Linux hay que pedirlo así, y necesita Docker Engine 20.10 o más.
+      # Declararlo en los tres sistemas no molesta y deja un solo archivo que
+      # funciona en todos.
+      - "host.docker.internal:host-gateway"
+
+    ports:
+      # 8000 afuera y adentro: es lo que el frontend tiene compilado como
+      # VITE_API_URL y lo que espera el camino manual.
+      - "8000:8000"
+
+    volumes:
+      # La base de SQLite vive acá. Sin esto, cada `docker compose down` se
+      # llevaría el catálogo cargado y el historial de órdenes.
+      - mercanova-data:/app/data
+
+    healthcheck:
+      # /brands es la consulta más barata que toca la base: si contesta, el
+      # servidor levantó y el catálogo está accesible. Se usa urllib y no curl
+      # porque python:3.13-slim no trae curl ni wget, y no vale la pena
+      # instalarlos para esto.
+      test:
+        - CMD
+        - python
+        - -c
+        - import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/brands', timeout=5)
+      interval: 30s
+      timeout: 10s
+      # La carga del catálogo pasa antes de que el servidor escuche, así que el
+      # primer arranque tarda más. Hasta que termine el start_period, un fallo
+      # no cuenta como "unhealthy".
+      start_period: 90s
+      retries: 3
+
+  frontend:
+    build:
+      context: .
+      dockerfile: docker/frontend.Dockerfile
+      args:
+        # Vite mete esto en el bundle al compilar. Se puede cambiar poniendo
+        # VITE_API_URL en el .env, pero hay que reconstruir la imagen para que
+        # tenga efecto: no es una variable del contenedor.
+        VITE_API_URL: ${VITE_API_URL:-http://localhost:8000}
+    image: mercanova-frontend
+
+    ports:
+      # 5173 afuera, a propósito y por dos razones:
+      #  1. Es el puerto que FRONTEND_ORIGINS ya habilita en CORS, así que el
+      #     .env del proyecto sirve igual con Docker y sin Docker.
+      #  2. Queda en localhost para el navegador de la máquina anfitriona, que
+      #     es lo que la entrada por voz (RF-08) necesita: la Web Speech API
+      #     solo funciona sobre localhost o HTTPS.
+      - "5173:80"
+
+    depends_on:
+      # Solo para el orden de arranque. El frontend no le habla al backend: lo
+      # hace el navegador. Si el backend tarda, la página carga igual y los
+      # pedidos fallan con el mensaje de error que ya muestra la aplicación.
+      - backend
+
+volumes:
+  mercanova-data:

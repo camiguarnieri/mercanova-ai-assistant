@@ -7,6 +7,7 @@ carritos propio de cada test. Ningún test llama al modelo ni sale a la red.
 from __future__ import annotations
 
 from collections.abc import Iterator
+from concurrent.futures import ThreadPoolExecutor
 from functools import partial
 from pathlib import Path
 from typing import Any
@@ -250,6 +251,71 @@ def test_the_checkout_does_not_take_payment_details(client: TestClient) -> None:
 
     # No hay pasarela de pago: un campo de tarjeta no es parte del contrato.
     assert response.status_code == 422
+
+
+def test_two_simultaneous_checkouts_create_exactly_one_order(
+    client: TestClient, cart_store: CartStore
+) -> None:
+    # El bug: los dos pedidos leían el mismo carrito, los dos pasaban la
+    # validación de stock y los dos escribían su orden. MN-MON-0001 tiene 10
+    # unidades entre los dos depósitos; se compran 2.
+    add(client, "MN-MON-0001", 2)
+    before = client.get("/products/MN-MON-0001").json()["available_qty"]
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        responses = [pool.submit(client.post, "/checkout", json=CHECKOUT) for _ in range(2)]
+        codes = sorted(response.result().status_code for response in responses)
+
+    # Uno compra y el otro se encuentra el carrito ya vacío.
+    assert codes == [201, 409]
+    # Una sola orden en el historial, no dos.
+    assert len(client.get("/orders", params={"session_id": "s-1"}).json()) == 1
+    # Y el stock descontado una sola vez.
+    after = client.get("/products/MN-MON-0001").json()["available_qty"]
+    assert after == before - 2
+    assert cart_store.items("s-1") == {}
+
+
+def test_the_second_simultaneous_checkout_explains_what_happened(
+    client: TestClient,
+) -> None:
+    # No un error técnico: el carrito quedó vacío porque la compra ya se
+    # confirmó, y eso es lo que dice el mensaje.
+    add(client, "MN-MON-0001", 1)
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        responses = [pool.submit(client.post, "/checkout", json=CHECKOUT) for _ in range(2)]
+        results = [response.result() for response in responses]
+
+    rejected = next(result for result in results if result.status_code == 409)
+    assert "carrito está vacío" in rejected.json()["detail"]
+
+
+def test_a_checkout_does_not_block_another_session(
+    client: TestClient, cart_store: CartStore
+) -> None:
+    # El lock es por sesión. Si fuera global, este test se quedaría colgado:
+    # el lock de 's-otra' está tomado mientras se compra con 's-1'.
+    add(client, "MN-MON-0001", 1)
+
+    with cart_store.session_lock("s-otra"):
+        response = client.post("/checkout", json=CHECKOUT)
+
+    assert response.status_code == 201
+
+
+def test_a_failed_checkout_releases_the_lock(client: TestClient) -> None:
+    # Con el carrito vacío el checkout falla adentro del lock. Si no se
+    # liberara, el intento siguiente de esa sesión no volvería nunca.
+    assert client.post("/checkout", json=CHECKOUT).status_code == 409
+
+    add(client, "MN-MON-0001", 1)
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        retry = pool.submit(client.post, "/checkout", json=CHECKOUT)
+        # Si el lock quedó tomado, esto corta acá en vez de colgar la suite.
+        response = retry.result(timeout=10)
+
+    assert response.status_code == 201
 
 
 def test_the_history_lists_the_orders_of_the_session(client: TestClient) -> None:
