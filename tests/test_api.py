@@ -455,6 +455,14 @@ def test_the_startup_logs_the_effective_configuration(
     assert api.config_report.FROM_DEFAULT in caplog.text
 
 
+def test_the_startup_quiets_the_http_client_log() -> None:
+    # Con el raíz en INFO, httpx imprime una línea por cada pedido a Ollama:
+    # son varias por turno y tapan el log de la aplicación.
+    api.configure_logging()
+
+    assert logging.getLogger("httpx").level == logging.WARNING
+
+
 def test_the_startup_logs_the_cors_origins_that_were_enabled(
     monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:

@@ -16,13 +16,21 @@ usa la aplicación.
 from __future__ import annotations
 
 import logging
-import os
 from collections.abc import Callable
 from dataclasses import dataclass
 
-from backend import db, llm
+from backend import db, environment, llm
+from backend.environment import (
+    FROM_DEFAULT,
+    FROM_ENVIRONMENT,
+    FROM_ENV_FILE,
+    source_of,
+)
 
 __all__ = [
+    "FROM_DEFAULT",
+    "FROM_ENVIRONMENT",
+    "FROM_ENV_FILE",
     "MASKED",
     "SENSITIVE_HINTS",
     "Setting",
@@ -46,19 +54,9 @@ MASKED = "*** (oculto)"
 # su cuenta, así que una variable con un secreto en este proyecto es plausible.
 SENSITIVE_HINTS = ("KEY", "TOKEN", "SECRET", "PASSWORD", "PASSWD", "CREDENTIAL", "AUTH")
 
-# De dónde pueden venir los valores. No se distingue la terminal del `.env`
-# porque no se puede hacer de forma confiable: para el proceso las dos cosas son
-# `os.environ`, y este proyecto no lee el `.env` por su cuenta.
-FROM_ENVIRONMENT = "configurado"
-FROM_DEFAULT = "default del código"
-
-# Aclaración para quien lee el log: si una variable dice "configurado" pero el
-# `.env` no se exportó ni se pasó con --env-file, el valor no salió de ahí.
-ENVIRONMENT_NOTE = (
-    "'configurado' significa que la variable estaba en el entorno del proceso. "
-    "El .env no se lee solo: tiene efecto si se exporta o si se arranca con "
-    "uvicorn --env-file .env."
-)
+# De dónde sale cada valor y cómo se dice si vino del entorno o del archivo lo
+# resuelve `environment.py`, que es el que carga el `.env` y por eso es el único
+# que puede distinguirlos.
 
 
 @dataclass(frozen=True)
@@ -103,22 +101,6 @@ def looks_sensitive(variable: str) -> bool:
     """
     name = variable.upper()
     return any(hint in name for hint in SENSITIVE_HINTS)
-
-
-# Dice si el valor vino del entorno o es el default del código.
-def source_of(variable: str) -> str:
-    """Resuelve de dónde salió el valor de una variable.
-
-    Args:
-        variable: Nombre de la variable de entorno.
-
-    Returns:
-        `FROM_ENVIRONMENT` si la variable está en el entorno con algo adentro,
-        `FROM_DEFAULT` si no está o está vacía. Una variable vacía cuenta como
-        default porque así la tratan `llm.py` y `db.py`: se caen al valor del
-        código.
-    """
-    return FROM_ENVIRONMENT if (os.getenv(variable) or "").strip() else FROM_DEFAULT
 
 
 # Lee el valor de una variable sin dejar que un error corte el arranque.
@@ -179,7 +161,7 @@ def lines(frontend_origins: list[str]) -> list[str]:
 
     Returns:
         Una línea por variable, con el nombre, el valor y de dónde salió, más
-        la aclaración de `ENVIRONMENT_NOTE` al final.
+        la línea del `.env` al final: qué archivo se cargó, o que no hay.
     """
     reported = settings(frontend_origins)
     width = max(len(setting.variable) for setting in reported)
@@ -187,7 +169,7 @@ def lines(frontend_origins: list[str]) -> list[str]:
         f"  {setting.variable:<{width}} = {value_of(setting)} ({source_of(setting.variable)})"
         for setting in reported
     ]
-    return [*written, f"  {ENVIRONMENT_NOTE}"]
+    return [*written, f"  {environment.env_file_note()}"]
 
 
 # Deja la configuración efectiva en el log, antes de cualquier otra precarga.

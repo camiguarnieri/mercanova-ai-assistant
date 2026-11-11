@@ -1,8 +1,9 @@
 """Tests de backend/config_report.py: el reporte de configuración del arranque.
 
-Ningún test lee el `.env` del repo: cada uno arma el entorno que necesita con
-`monkeypatch`, así el reporte no depende de cómo tenga configurada la máquina
-quien corre los tests.
+Ningún test lee el `.env` del repo: la fixture `without_the_project_environment`
+de `conftest.py` saca esas variables del entorno en todos los tests, y cada uno
+pone con `monkeypatch` las que necesita. Así el reporte no depende de cómo tenga
+configurada la máquina quien corre los tests.
 """
 
 from __future__ import annotations
@@ -11,28 +12,13 @@ import logging
 
 import pytest
 
-from backend import config_report, db, llm
+from backend import config_report, db, environment, llm
 
-# Las variables que el reporte lee, para poder limpiarlas antes de cada test.
-REPORTED = (
-    "OLLAMA_MODEL",
-    "OLLAMA_HOST",
-    "OLLAMA_TIMEOUT",
-    "OLLAMA_NUM_CTX",
-    "OLLAMA_NUM_PREDICT",
-    "OLLAMA_KEEP_ALIVE",
-    "DATABASE_PATH",
-    "FRONTEND_ORIGINS",
-)
+# Las variables que el reporte lee. Son las del proyecto: si alguien agrega una,
+# estos tests la cubren sin tocarlos.
+REPORTED = environment.PROJECT_VARIABLES
 
 ORIGINS = ["http://localhost:5173"]
-
-
-@pytest.fixture(autouse=True)
-def clean_environment(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Deja el entorno sin ninguna de las variables del reporte."""
-    for variable in REPORTED:
-        monkeypatch.delenv(variable, raising=False)
 
 
 # Devuelve la línea del reporte de una variable.
@@ -135,13 +121,25 @@ def test_the_database_path_is_reported(monkeypatch: pytest.MonkeyPatch) -> None:
     assert config_report.FROM_ENVIRONMENT in line
 
 
-def test_the_report_explains_what_configured_means() -> None:
-    # El .env no se lee solo: sin esta aclaración, "configurado" se lee como
-    # "salió del .env", que no es necesariamente cierto.
+def test_the_report_names_the_env_file() -> None:
+    # Para saber qué archivo se cargó, no solo que hubo uno.
     written = "\n".join(config_report.lines(ORIGINS))
 
-    assert ".env" in written
-    assert "--env-file" in written
+    assert str(environment.ENV_FILE) in written
+
+
+def test_a_value_that_came_from_the_env_file_is_distinguished(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # La distinción sale de environment.py, que anota qué variables entraron al
+    # cargar el archivo. Acá se simula ese anotado.
+    monkeypatch.setenv("OLLAMA_MODEL", "del-archivo")
+    monkeypatch.setattr(environment, "_from_file", frozenset({"OLLAMA_MODEL"}))
+
+    line = line_of("OLLAMA_MODEL")
+
+    assert "del-archivo" in line
+    assert config_report.FROM_ENV_FILE in line
 
 
 @pytest.mark.parametrize(

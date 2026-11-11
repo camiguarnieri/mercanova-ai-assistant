@@ -23,6 +23,7 @@ from backend import (
     chat_api,
     config_report,
     db,
+    environment,
     inventory,
     llm,
     orders,
@@ -32,6 +33,16 @@ from backend.dependencies import ConnectionScope, get_connection_scope
 from backend.models import Brand, Category, ProductDetail, ProductPage
 
 logger = logging.getLogger(__name__)
+
+# El .env se carga al importar este módulo y no en el lifespan a propósito: los
+# orígenes de CORS se resuelven más abajo, cuando se arma el middleware, que es
+# al importar. Cargándolo en el lifespan, FRONTEND_ORIGINS del archivo llegaría
+# tarde y el middleware quedaría armado con los orígenes de desarrollo.
+#
+# Está acá y no en `backend/__init__.py` para que importar un módulo de
+# `backend` no tenga efectos sobre el entorno del proceso: los tests importan
+# estos módulos sueltos y no tienen por qué heredar el .env de cada máquina.
+environment.load_env_file()
 
 # Origen del frontend de Vite en desarrollo.
 DEFAULT_FRONTEND_ORIGINS = "http://localhost:5173,http://127.0.0.1:5173"
@@ -109,6 +120,10 @@ def configure_logging() -> None:
     pisa una configuración que haya armado quien levanta la aplicación.
     """
     logging.basicConfig(level=logging.INFO, format="%(levelname)s:     %(message)s")
+    # Con el raíz en INFO, httpx imprime una línea por cada pedido a Ollama: son
+    # varias por turno y tapan el log de la aplicación. Se dejan en WARNING, que
+    # es donde avisa lo que sí importa.
+    logging.getLogger("httpx").setLevel(logging.WARNING)
 
 
 @asynccontextmanager

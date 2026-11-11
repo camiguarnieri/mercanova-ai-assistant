@@ -17,7 +17,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from backend import db  # noqa: E402  (después de ajustar sys.path)
+from backend import db, environment  # noqa: E402  (después de ajustar sys.path)
 from scripts import dataset_reader  # noqa: E402
 from scripts.dataset_reader import DatasetError  # noqa: E402
 
@@ -108,6 +108,12 @@ def main(argv: list[str] | None = None) -> int:
     Returns:
         0 si la carga terminó bien, 1 si hubo un error esperado.
     """
+    # El .env se carga acá y no al importar el módulo: este script también se
+    # usa desde los tests, que importan `main` y no tienen por qué heredar el
+    # .env de la máquina. Sin esto, --database default y DATABASE_PATH del
+    # archivo no coincidirían con la base que usa el servidor.
+    environment.load_env_file()
+
     parser = argparse.ArgumentParser(description="Carga el Excel de MercaNova en SQLite.")
     parser.add_argument(
         "--excel", type=Path, default=DEFAULT_EXCEL_PATH, help="Ruta del Excel del dataset."
